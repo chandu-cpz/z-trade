@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["kotak-neo-api", "z-trade", "z-folder-improved", "z-paper-trading", "z-alpha-strategies"]

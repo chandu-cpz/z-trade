@@ -1,0 +1,21 @@
+[package]
+name = "z-paper-trading"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.43"
+colored = "2.1"
+crossterm = "0.28"
+dotenvy = "0.15.7"
+env_logger = "0.11"
+futures = "0.3"
+kotak-neo-api = { path = "../kotak-neo-api" }
+ratatui = "0.29"
+tokio = { version = "1.49.0", features = ["full", "rt-multi-thread"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3

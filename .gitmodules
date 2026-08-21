@@ -1,0 +1,3 @@
+[submodule "kotak-neo-api"]
+	path = kotak-neo-api
+	url = git@github.com:chandu-cpz/kotak-neo-api.git
