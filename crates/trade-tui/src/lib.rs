@@ -692,7 +692,7 @@ fn render_help_modal(frame: &mut Frame, area: Rect) {
         Line::from(vec![Span::styled("  q / Esc      ", Style::default().fg(NEO_MUTED)), Span::raw("Close popup or quit application")]),
         Line::raw(""),
         Line::from(Span::styled("⚡ Strategies & risk hot-reload automatically when editing configs/default.toml", Style::default().fg(NEO_GREEN))),
-        Line::from(Span::styled("💾 All trades, holdings & pending orders auto-saved to data/session_state.json", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled("💾 All trades, holdings & pending orders auto-saved to data/session_state.toml", Style::default().fg(Color::Cyan))),
     ];
 
     let block = Block::default()

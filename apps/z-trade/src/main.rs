@@ -396,7 +396,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     terminal.show_cursor()?;
 
     println!("\n{}", "═══ Z-TRADE QUANT SESSION CLOSED ═══");
-    println!("  Session Saved To:      {}/session_state.json", STATE_DIR);
+    println!("  Session Saved To:      {}/session_state.toml", STATE_DIR);
     println!("  Ticks Ingested:        {}", sim_engine.tick_count);
     println!("  Total Realized P&L:    ₹{:.2}", sim_engine.stats.realized_pnl);
     println!("  Total Trades Executed: {}", sim_engine.stats.trades_count);

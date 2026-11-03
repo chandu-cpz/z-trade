@@ -43,7 +43,7 @@ pub struct SessionStore;
 
 impl SessionStore {
     fn state_file_path(data_dir: &Path) -> PathBuf {
-        data_dir.join("session_state.json")
+        data_dir.join("session_state.toml")
     }
 
     fn history_dir_path(data_dir: &Path) -> PathBuf {
@@ -61,14 +61,14 @@ impl SessionStore {
 
         if file_path.exists() {
             if let Ok(content) = fs::read_to_string(&file_path) {
-                if let Ok(mut state) = serde_json::from_str::<SessionState>(&content) {
+                if let Ok(mut state) = toml::from_str::<SessionState>(&content) {
                     // Check if state is from today
                     if state.session_date == today {
                         return state;
                     }
 
                     // Day rollover: archive yesterday's state
-                    let archive_name = format!("session_{}.json", state.session_date);
+                    let archive_name = format!("session_{}.toml", state.session_date);
                     let archive_path = Self::history_dir_path(dir).join(archive_name);
                     let _ = fs::write(&archive_path, &content);
 
@@ -124,13 +124,13 @@ impl SessionStore {
     pub fn save(data_dir: impl AsRef<Path>, state: &SessionState) -> std::io::Result<()> {
         let dir = data_dir.as_ref();
         let target_path = Self::state_file_path(dir);
-        let temp_path = dir.join("session_state.json.tmp");
+        let temp_path = dir.join("session_state.toml.tmp");
 
-        let json = serde_json::to_string_pretty(state).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("JSON serialization error: {}", e))
+        let toml_str = toml::to_string_pretty(state).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, format!("TOML serialization error: {}", e))
         })?;
 
-        fs::write(&temp_path, json)?;
+        fs::write(&temp_path, toml_str)?;
         fs::rename(&temp_path, &target_path)?;
         Ok(())
     }
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_session_store_init_and_save() {
-        let temp_dir = std::env::temp_dir().join(format!("test_session_{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!("test_session_toml_{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp_dir);
 
         let initial_capital = 500_000.0;
@@ -170,10 +170,11 @@ mod tests {
             origin: "MANUAL".to_string(),
         });
 
-        // Save
+        // Save TOML
         SessionStore::save(&temp_dir, &state).expect("Save should succeed");
+        assert!(temp_dir.join("session_state.toml").exists());
 
-        // Reload
+        // Reload from TOML
         let loaded = SessionStore::load_or_init(&temp_dir, initial_capital);
         assert_eq!(loaded.free_capital, 450_000.0);
         assert_eq!(loaded.locked_capital, 50_000.0);
