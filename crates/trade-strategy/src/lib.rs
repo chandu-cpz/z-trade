@@ -6,7 +6,7 @@ use trade_core::types::{PositionSide, StrategyType};
 use trade_indicators::calculate_slope;
 
 pub mod engine;
-pub use engine::{StockTracker, StrategyEngine};
+pub use engine::{ChartData, StockTracker, StrategyEngine};
 
 pub struct StrategyContext<'a> {
     pub current_price: f64,

@@ -3,8 +3,9 @@ use std::time::Instant;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
     Dashboard = 0,
-    Signals = 1,
-    Analytics = 2,
+    Chart = 1,
+    Signals = 2,
+    Analytics = 3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +13,7 @@ pub enum ActivePane {
     Holdings,
     Tradebook,
     Signals,
+    Chart,
 }
 
 pub struct UiState {
@@ -20,6 +22,7 @@ pub struct UiState {
     pub holdings_selected: usize,
     pub tradebook_selected: usize,
     pub signals_selected: usize,
+    pub selected_symbol: Option<String>,
     pub show_help: bool,
     pub show_debug: bool,
     pub status_message: Option<(String, Instant)>,
@@ -33,6 +36,7 @@ impl Default for UiState {
             holdings_selected: 0,
             tradebook_selected: 0,
             signals_selected: 0,
+            selected_symbol: None,
             show_help: false,
             show_debug: false,
             status_message: None,
@@ -54,6 +58,7 @@ impl UiState {
             ActivePane::Holdings => ActivePane::Tradebook,
             ActivePane::Tradebook => ActivePane::Holdings,
             ActivePane::Signals => ActivePane::Holdings,
+            ActivePane::Chart => ActivePane::Holdings,
         };
     }
 
@@ -77,6 +82,7 @@ impl UiState {
                     self.signals_selected += 1;
                 }
             }
+            ActivePane::Chart => {}
         }
     }
 
@@ -97,6 +103,7 @@ impl UiState {
                     self.signals_selected -= 1;
                 }
             }
+            ActivePane::Chart => {}
         }
     }
 
@@ -105,6 +112,7 @@ impl UiState {
             ActivePane::Holdings => self.holdings_selected = 0,
             ActivePane::Tradebook => self.tradebook_selected = 0,
             ActivePane::Signals => self.signals_selected = 0,
+            ActivePane::Chart => {}
         }
     }
 
@@ -116,6 +124,7 @@ impl UiState {
             ActivePane::Holdings => self.holdings_selected = max_rows.saturating_sub(1),
             ActivePane::Tradebook => self.tradebook_selected = max_rows.saturating_sub(1),
             ActivePane::Signals => self.signals_selected = max_rows.saturating_sub(1),
+            ActivePane::Chart => {}
         }
     }
 }

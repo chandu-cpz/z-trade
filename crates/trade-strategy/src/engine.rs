@@ -266,6 +266,62 @@ impl StockTracker {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ChartData {
+    pub symbol: String,
+    pub price_points: Vec<(f64, f64)>,
+    pub vwap_val: f64,
+    pub rsi_val: f64,
+    pub ema_val: f64,
+    pub min_price: f64,
+    pub max_price: f64,
+    pub current_price: f64,
+    pub total_buy_qty: u64,
+    pub total_sell_qty: u64,
+    pub best_bid: f64,
+    pub best_ask: f64,
+}
+
+impl StockTracker {
+    pub fn chart_data(&self) -> ChartData {
+        let mut min_price = f64::MAX;
+        let mut max_price = f64::MIN;
+        let price_points: Vec<(f64, f64)> = self
+            .tick_buf
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| {
+                if p < min_price { min_price = p; }
+                if p > max_price { max_price = p; }
+                (i as f64, p)
+            })
+            .collect();
+
+        if min_price > max_price {
+            min_price = (self.current_price * 0.995).max(0.0);
+            max_price = self.current_price * 1.005;
+        } else if (max_price - min_price).abs() < 0.01 {
+            min_price -= 0.5;
+            max_price += 0.5;
+        }
+
+        ChartData {
+            symbol: self.symbol.clone(),
+            price_points,
+            vwap_val: self.vwap.vwap,
+            rsi_val: self.rsi.rsi,
+            ema_val: self.ema_short.value(),
+            min_price,
+            max_price,
+            current_price: self.current_price,
+            total_buy_qty: self.total_buy_qty,
+            total_sell_qty: self.total_sell_qty,
+            best_bid: self.best_bid,
+            best_ask: self.best_ask,
+        }
+    }
+}
+
 pub struct StrategyEngine {
     pub trackers: HashMap<String, StockTracker>,
     pub config: Config,
@@ -286,4 +342,9 @@ impl StrategyEngine {
             .or_insert_with(|| StockTracker::new(tick.symbol.clone(), tick.token));
         tracker.on_tick(tick, &self.config)
     }
+
+    pub fn get_chart_data(&self, symbol: &str) -> Option<ChartData> {
+        self.trackers.get(symbol).map(|t| t.chart_data())
+    }
 }
+

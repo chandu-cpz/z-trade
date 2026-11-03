@@ -1,6 +1,7 @@
 use std::env;
+use std::fs;
 use std::io::{self, stdout};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::{
     cursor::Show,
@@ -18,6 +19,42 @@ use trade_sim::PaperSimulationEngine;
 use trade_strategy::StrategyEngine;
 use trade_tui::{render_ui, ActivePane, ActiveTab, UiState};
 
+const CONFIG_PATH: &str = "configs/default.toml";
+
+struct HotReloader {
+    last_modified: SystemTime,
+}
+
+impl HotReloader {
+    fn new() -> Self {
+        let last_modified = fs::metadata(CONFIG_PATH)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        Self { last_modified }
+    }
+
+    fn check_and_reload(
+        &mut self,
+        sim_engine: &mut PaperSimulationEngine,
+        strat_engine: &mut StrategyEngine,
+        ui_state: &mut UiState,
+    ) {
+        if let Ok(meta) = fs::metadata(CONFIG_PATH) {
+            if let Ok(mod_time) = meta.modified() {
+                if mod_time > self.last_modified {
+                    self.last_modified = mod_time;
+                    let new_config = Config::load_or_default(CONFIG_PATH);
+                    sim_engine.config = new_config.clone();
+                    strat_engine.config = new_config;
+                    let msg = "⚡ HOT RELOAD: Strategies & Risk updated from configs/default.toml";
+                    sim_engine.log_message(msg.to_string());
+                    ui_state.set_status(msg);
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     dotenv().ok();
@@ -33,10 +70,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         default_hook(info);
     }));
 
-    let config = Config::load_or_default("configs/default.toml");
+    let config = Config::load_or_default(CONFIG_PATH);
     let mut sim_engine = PaperSimulationEngine::new(config.clone());
     let mut strat_engine = StrategyEngine::new(config.clone());
     let mut ui_state = UiState::new();
+    let mut hot_reloader = HotReloader::new();
 
     // 1. Authenticate with Kotak Neo API
     let access_token = env::var("KOTAK_ACCESS_TOKEN").expect("KOTAK_ACCESS_TOKEN missing in .env");
@@ -48,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut api = KotakNeo::new();
     api.login(&access_token, &mobile_number, &ucc, &totp_secret, &mpin).await?;
     sim_engine.log_message("Authenticated with Kotak Neo API.".to_string());
-    ui_state.set_status("Connected to Kotak Neo");
+    ui_state.set_status("Connected to Kotak Neo SFeed");
 
     // 2. Connect Market Data Feed
     let mut feed = KotakFeed::connect(&api, None).await?;
@@ -66,7 +104,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 4. Main Event Loop
     loop {
-        // A. Handle Vim & Keyboard Controls
+        // A. Check for hot-reloading strategy and risk configs
+        hot_reloader.check_and_reload(&mut sim_engine, &mut strat_engine, &mut ui_state);
+
+        // B. Handle Vim & Keyboard Controls
         if event::poll(Duration::from_millis(1))? {
             if let Event::Key(key) = event::read()? {
                 // If help modal is visible, Esc or ? closes it
@@ -95,47 +136,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     ActivePane::Holdings => sim_engine.positions.len(),
                     ActivePane::Tradebook => sim_engine.trades.len(),
                     ActivePane::Signals => sim_engine.signal_feed.len(),
+                    ActivePane::Chart => 0,
                 };
 
                 match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+
                     // Navigation: Next Row
                     KeyCode::Char('j') | KeyCode::Down => {
                         ui_state.next_row(max_rows);
+                        update_selected_symbol(&mut ui_state, &sim_engine);
                     }
                     // Navigation: Prev Row
                     KeyCode::Char('k') | KeyCode::Up => {
                         ui_state.prev_row();
+                        update_selected_symbol(&mut ui_state, &sim_engine);
                     }
                     // Navigation: Top
                     KeyCode::Char('g') => {
                         ui_state.jump_to_top();
+                        update_selected_symbol(&mut ui_state, &sim_engine);
                     }
                     // Navigation: Bottom
                     KeyCode::Char('G') => {
                         ui_state.jump_to_bottom(max_rows);
+                        update_selected_symbol(&mut ui_state, &sim_engine);
                     }
                     // Navigation: Pane Switching
                     KeyCode::Tab => {
                         ui_state.cycle_pane();
+                        update_selected_symbol(&mut ui_state, &sim_engine);
                     }
+                    // Interactive Chart View Toggle
+                    KeyCode::Enter => {
+                        ui_state.active_tab = match ui_state.active_tab {
+                            ActiveTab::Chart => ActiveTab::Dashboard,
+                            _ => ActiveTab::Chart,
+                        };
+                    }
+                    KeyCode::Char('c') => {
+                        ui_state.active_tab = match ui_state.active_tab {
+                            ActiveTab::Chart => ActiveTab::Dashboard,
+                            _ => ActiveTab::Chart,
+                        };
+                    }
+
                     // Navigation: Tabs
                     KeyCode::Char('h') | KeyCode::Left => {
                         ui_state.active_tab = match ui_state.active_tab {
                             ActiveTab::Dashboard => ActiveTab::Analytics,
-                            ActiveTab::Signals => ActiveTab::Dashboard,
+                            ActiveTab::Chart => ActiveTab::Dashboard,
+                            ActiveTab::Signals => ActiveTab::Chart,
                             ActiveTab::Analytics => ActiveTab::Signals,
                         };
                     }
                     KeyCode::Char('l') | KeyCode::Right => {
                         ui_state.active_tab = match ui_state.active_tab {
-                            ActiveTab::Dashboard => ActiveTab::Signals,
+                            ActiveTab::Dashboard => ActiveTab::Chart,
+                            ActiveTab::Chart => ActiveTab::Signals,
                             ActiveTab::Signals => ActiveTab::Analytics,
                             ActiveTab::Analytics => ActiveTab::Dashboard,
                         };
                     }
                     KeyCode::Char('1') => ui_state.active_tab = ActiveTab::Dashboard,
-                    KeyCode::Char('2') => ui_state.active_tab = ActiveTab::Signals,
-                    KeyCode::Char('3') => ui_state.active_tab = ActiveTab::Analytics,
+                    KeyCode::Char('2') => ui_state.active_tab = ActiveTab::Chart,
+                    KeyCode::Char('3') => ui_state.active_tab = ActiveTab::Signals,
+                    KeyCode::Char('4') => ui_state.active_tab = ActiveTab::Analytics,
 
                     // Trading: Square off selected holding
                     KeyCode::Char('x') => {
@@ -171,15 +238,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         ui_state.show_help = !ui_state.show_help;
                     }
 
-                    // Exit
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     _ => {}
                 }
             }
         }
 
-        // B. Ingest and Process Market Ticks
+        // C. Ultra Low-Latency Ingest & Market Tick Evaluation
         tokio::select! {
             tick_opt = feed.next_tick() => {
                 if let Some(tick) = tick_opt {
@@ -192,9 +256,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             _ = tokio::time::sleep(Duration::from_millis(5)) => {}
         }
 
-        // C. Render Terminal UI
+        // D. Render Terminal Dashboard (Decoupled ~30 FPS)
         if last_render.elapsed() >= render_interval {
-            terminal.draw(|f| render_ui(f, &sim_engine, &ui_state))?;
+            terminal.draw(|f| render_ui(f, &sim_engine, &strat_engine, &ui_state))?;
             last_render = Instant::now();
         }
     }
@@ -204,11 +268,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen, Show)?;
     terminal.show_cursor()?;
 
-    println!("\n{}", "═══ Z-TRADE SESSION CLOSED ═══");
-    println!("  Ticks Processed:       {}", sim_engine.tick_count);
+    println!("\n{}", "═══ Z-TRADE QUANT SESSION CLOSED ═══");
+    println!("  Ticks Ingested:        {}", sim_engine.tick_count);
     println!("  Total Realized P&L:    ₹{:.2}", sim_engine.stats.realized_pnl);
     println!("  Total Trades Executed: {}", sim_engine.stats.trades_count);
     println!("  Win Rate:              {:.1}%\n", sim_engine.stats.win_rate());
 
     Ok(())
+}
+
+fn update_selected_symbol(ui_state: &mut UiState, sim_engine: &PaperSimulationEngine) {
+    match ui_state.active_pane {
+        ActivePane::Holdings => {
+            let mut positions: Vec<&String> = sim_engine.positions.keys().collect();
+            positions.sort();
+            if let Some(sym) = positions.get(ui_state.holdings_selected) {
+                ui_state.selected_symbol = Some((*sym).clone());
+            }
+        }
+        ActivePane::Signals => {
+            let signals: Vec<&trade_core::signal::DisplaySignal> = sim_engine.signal_feed.iter().rev().collect();
+            if let Some(sig) = signals.get(ui_state.signals_selected) {
+                ui_state.selected_symbol = Some(sig.symbol.clone());
+            }
+        }
+        _ => {}
+    }
 }

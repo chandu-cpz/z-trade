@@ -8,3 +8,4 @@ crossterm = "0.28"
 ratatui = "0.29"
 trade-core = { path = "../trade-core" }
 trade-sim = { path = "../trade-sim" }
+trade-strategy = { path = "../trade-strategy" }
