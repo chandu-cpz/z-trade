@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if disconnected {
             break;
         }
-        std::thread::yield_now();
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 
     // Terminal cleanup
