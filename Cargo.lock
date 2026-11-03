@@ -3172,51 +3172,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "z-alpha-strategies"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "colored",
- "crossterm",
- "dotenvy",
- "env_logger",
- "futures",
- "kotak-neo-api",
- "ratatui",
- "tokio",
-]
-
-[[package]]
-name = "z-folder-improved"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "colored",
- "crossterm",
- "dotenvy",
- "env_logger",
- "futures",
- "kotak-neo-api",
- "ratatui",
- "tokio",
-]
-
-[[package]]
-name = "z-paper-trading"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "colored",
- "crossterm",
- "dotenvy",
- "env_logger",
- "futures",
- "kotak-neo-api",
- "ratatui",
- "tokio",
-]
-
-[[package]]
 name = "z-trade"
 version = "0.1.0"
 dependencies = [
