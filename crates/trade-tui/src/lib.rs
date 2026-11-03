@@ -2,8 +2,6 @@ pub mod chart;
 pub mod order_modal;
 pub mod state;
 
-use std::collections::HashMap;
-use std::time::Duration;
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -14,10 +12,10 @@ use ratatui::{
 };
 
 pub use chart::{
-    render_stock_chart, NEO_ACCENT, NEO_BORDER, NEO_FOCUS_BORDER, NEO_GREEN, NEO_MUTED, NEO_RED,
+    render_stock_view, KITE_BLUE, KITE_BORDER, KITE_GREEN, KITE_MUTED, KITE_RED,
 };
-pub use order_modal::{render_order_modal, OrderModalState};
-pub use state::{ActivePane, ActiveTab, UiState};
+pub use order_modal::{render_order_modal, OrderModalState, ProductType};
+pub use state::{ActivePane, BottomTab, UiState};
 pub use trade_core::store::PendingOrder;
 use trade_core::types::PositionSide;
 use trade_sim::PaperSimulationEngine;
@@ -34,29 +32,15 @@ pub fn render_ui(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Top Navigation Header
-            Constraint::Length(6), // Hero Portfolio Balance & Risk Card
-            Constraint::Min(10),   // Active View Body (Dashboard / Chart / Signals / Analytics)
-            Constraint::Length(2), // Bottom Status Bar / Vim status
+            Constraint::Length(3), // Top Navigation Bar & Market Tickers
+            Constraint::Min(10),   // Main Split (Watchlist on Left, Stock & Tabs on Right)
+            Constraint::Length(1), // Bottom 1-line Vim Status & Shortcuts Bar
         ])
         .split(size);
 
-    render_header(frame, state, chunks[0]);
-    render_hero_portfolio(frame, engine, chunks[1]);
-
-    // Active Tab Content
-    match state.active_tab {
-        ActiveTab::Dashboard => render_dashboard_tab(frame, engine, strat_engine, state, chunks[2]),
-        ActiveTab::Chart => render_fullscreen_chart(frame, strat_engine, state, chunks[2]),
-        ActiveTab::Signals => render_signals_tab(frame, engine, state, chunks[2]),
-        ActiveTab::Analytics => render_analytics_tab(frame, engine, state, chunks[2]),
-    }
-
-    render_footer(frame, engine, state, chunks[3]);
-
-    if state.show_debug {
-        render_debug_drawer(frame, engine, size);
-    }
+    render_top_bar(frame, engine, state, chunks[0]);
+    render_main_split(frame, engine, strat_engine, state, chunks[1]);
+    render_bottom_status_bar(frame, state, chunks[2]);
 
     if state.show_help {
         render_help_modal(frame, size);
@@ -67,669 +51,501 @@ pub fn render_ui(
     }
 }
 
-fn render_header(frame: &mut Frame, state: &UiState, area: Rect) {
-    let titles = vec![
-        Span::raw(" 1: Terminal "),
-        Span::raw(" 2: Live Chart "),
-        Span::raw(" 3: Signals Radar "),
-        Span::raw(" 4: Analytics "),
-    ];
+fn render_top_bar(frame: &mut Frame, engine: &PaperSimulationEngine, _state: &UiState, area: Rect) {
+    let tot_pnl = engine.total_portfolio_pnl();
+    let pnl_color = if tot_pnl >= 0.0 { KITE_GREEN } else { KITE_RED };
+    let pnl_sign = if tot_pnl >= 0.0 { "+₹" } else { "-₹" };
 
-    let tabs = Tabs::new(titles)
-        .select(state.active_tab as usize)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(NEO_BORDER))
-                .title(Line::from(vec![
-                    Span::styled(" Z-TRADE ", Style::default().fg(Color::Black).bg(NEO_GREEN).add_modifier(Modifier::BOLD)),
-                    Span::styled(" QUANT WORKSTATION ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(" [HFT / ULTRA-LOW LATENCY] ", Style::default().fg(NEO_ACCENT)),
-                    Span::styled(" ● SFEED CONNECTED ", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD)),
-                ])),
-        )
-        .style(Style::default().fg(NEO_MUTED))
-        .highlight_style(
-            Style::default()
-                .fg(NEO_GREEN)
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(Modifier::UNDERLINED),
-        )
-        .divider(Span::styled("│", Style::default().fg(NEO_BORDER)));
-
-    frame.render_widget(tabs, area);
-}
-
-fn render_hero_portfolio(frame: &mut Frame, engine: &PaperSimulationEngine, area: Rect) {
-    let total_pnl = engine.total_portfolio_pnl();
-    let unrealized = engine.unrealized_pnl();
-    let realized = engine.stats.realized_pnl;
-    let free = engine.free_capital();
-    let locked = engine.locked_capital;
-    let total_val = engine.total_value();
-    let initial = engine.initial_capital;
-    let total_return_pct = if initial > 0.0 { (total_pnl / initial) * 100.0 } else { 0.0 };
-
-    let pnl_color = if total_pnl >= 0.0 { NEO_GREEN } else { NEO_RED };
-    let pnl_sign = if total_pnl >= 0.0 { "+" } else { "" };
-
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(28),
-            Constraint::Percentage(24),
-            Constraint::Percentage(24),
-            Constraint::Percentage(24),
-        ])
-        .split(area);
-
-    // Card 1: Total Portfolio Returns
-    let c1 = Paragraph::new(vec![
-        Line::from(Span::styled("TOTAL RETURNS", Style::default().fg(NEO_MUTED))),
-        Line::from(vec![
-            Span::styled(
-                format!("₹{}{:.2}", pnl_sign, total_pnl),
-                Style::default().fg(pnl_color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled(
-                format!("({}{:.2}%)", pnl_sign, total_return_pct),
-                Style::default().fg(pnl_color),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("Realized: "),
-            Span::styled(format!("₹{:.2}", realized), Style::default().fg(if realized >= 0.0 { NEO_GREEN } else { NEO_RED })),
-        ]),
-    ])
-    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(NEO_BORDER)));
-    frame.render_widget(c1, cols[0]);
-
-    // Card 2: Current Net Portfolio Value
-    let c2 = Paragraph::new(vec![
-        Line::from(Span::styled("PORTFOLIO VALUATION", Style::default().fg(NEO_MUTED))),
-        Line::from(Span::styled(
-            format!("₹{:.2}", total_val),
+    let top_line = Line::from(vec![
+        Span::styled(
+            " Z-TRADE ",
+            Style::default().fg(Color::Black).bg(KITE_BLUE).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  KITE / GROWW STYLE  ",
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(vec![
-            Span::raw("Unrealized: "),
-            Span::styled(format!("₹{:.2}", unrealized), Style::default().fg(if unrealized >= 0.0 { NEO_GREEN } else { NEO_RED })),
-        ]),
-    ])
-    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(NEO_BORDER)));
-    frame.render_widget(c2, cols[1]);
+        ),
+        Span::styled(
+            " [PAPER TRADING] ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" │  NIFTY 50: "),
+        Span::styled("22,450.30 ▲ +0.41%", Style::default().fg(KITE_GREEN).add_modifier(Modifier::BOLD)),
+        Span::raw("  BANKNIFTY: "),
+        Span::styled("48,150.20 ▼ -0.14%", Style::default().fg(KITE_RED).add_modifier(Modifier::BOLD)),
+        Span::raw("  │  Cash: "),
+        Span::styled(format!("₹{:.2}", engine.free_capital()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("  Net P&L: "),
+        Span::styled(format!("{}{:.2}", pnl_sign, tot_pnl.abs()), Style::default().fg(pnl_color).add_modifier(Modifier::BOLD)),
+    ]);
 
-    // Card 3: Margin & Free Capital
-    let c3 = Paragraph::new(vec![
-        Line::from(Span::styled("MARGIN / CAPITAL", Style::default().fg(NEO_MUTED))),
-        Line::from(Span::styled(
-            format!("₹{:.2}", locked),
-            Style::default().fg(NEO_ACCENT).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(vec![
-            Span::raw("Available Cash: "),
-            Span::styled(format!("₹{:.0}", free), Style::default().fg(NEO_GREEN)),
-        ]),
-    ])
-    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(NEO_BORDER)));
-    frame.render_widget(c3, cols[2]);
-
-    // Card 4: Risk & Trades
-    let c4 = Paragraph::new(vec![
-        Line::from(Span::styled("EXECUTION RISK", Style::default().fg(NEO_MUTED))),
-        Line::from(vec![
-            Span::raw("Positions: "),
-            Span::styled(
-                format!("{}/{}", engine.positions.len(), engine.config.portfolio.max_positions),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" │ Win: "),
-            Span::styled(
-                format!("{:.1}%", engine.stats.win_rate()),
-                Style::default().fg(if engine.stats.win_rate() >= 50.0 { NEO_GREEN } else { NEO_RED }),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("Circuit Limit: "),
-            Span::styled(format!("₹{:.0}", engine.config.portfolio.max_loss), Style::default().fg(NEO_MUTED)),
-            Span::raw(" │ Status: "),
-            if engine.circuit_breaker_hit {
-                Span::styled("TRIPPED ⚠", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD))
-            } else {
-                Span::styled("NOMINAL", Style::default().fg(NEO_GREEN))
-            },
-        ]),
-    ])
-    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(NEO_BORDER)));
-    frame.render_widget(c4, cols[3]);
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(KITE_BORDER));
+    frame.render_widget(Paragraph::new(top_line).block(block), area);
 }
 
-fn render_dashboard_tab(
+fn render_main_split(
     frame: &mut Frame,
     engine: &PaperSimulationEngine,
     strat_engine: &StrategyEngine,
     state: &UiState,
     area: Rect,
 ) {
-    let chunks = Layout::default()
+    let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Length(34), // Watchlist on Left (34 cols)
+            Constraint::Min(40),    // Right Panel: Stock View (Chart/Depth) + Bottom Tabs
+        ])
         .split(area);
 
-    let left_chunks = Layout::default()
+    // Left: Watchlist
+    render_watchlist(frame, engine, strat_engine, state, h_chunks[0]);
+
+    // Right: Stock Chart + Kite Bottom Tabs (Positions/Orders/Funds)
+    let r_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(33), // Watchlist Pane
-            Constraint::Percentage(37), // Holdings Pane
-            Constraint::Percentage(30), // Tradebook / Fills Pane
+            Constraint::Percentage(58), // Stock Header, Candlestick Chart, 5-Depth
+            Constraint::Percentage(42), // Bottom Tabs (Positions / Orders / Funds)
         ])
-        .split(chunks[0]);
+        .split(h_chunks[1]);
 
-    render_watchlist_pane(frame, strat_engine, state, left_chunks[0]);
-    render_holdings_pane(frame, engine, state, left_chunks[1]);
-    render_tradebook_pane(frame, engine, state, left_chunks[2]);
+    let chart_data = strat_engine.get_chart_data(&state.selected_symbol);
+    let tf_label = match state.chart_timeframe {
+        300 => "5m",
+        900 => "15m",
+        _ => "1m",
+    };
+    render_stock_view(frame, chart_data.as_ref(), state.show_depth, tf_label, r_chunks[0]);
 
-    // Right Split: Live Real-Time Interactive Chart
-    let chart_symbol = state
-        .selected_symbol
-        .as_deref()
-        .or_else(|| engine.positions.keys().next().map(|s| s.as_str()))
-        .or_else(|| strat_engine.trackers.keys().next().map(|s| s.as_str()));
-
-    let chart_data = chart_symbol.and_then(|sym| strat_engine.get_chart_data(sym));
-    render_stock_chart(frame, chart_data.as_ref(), chunks[1]);
+    render_bottom_tabs(frame, engine, state, r_chunks[1]);
 }
 
-fn render_watchlist_pane(
+fn render_watchlist(
     frame: &mut Frame,
+    engine: &PaperSimulationEngine,
     strat_engine: &StrategyEngine,
     state: &UiState,
     area: Rect,
 ) {
     let is_focused = state.active_pane == ActivePane::Watchlist;
-    let border_color = if is_focused { NEO_FOCUS_BORDER } else { NEO_BORDER };
+    let border_color = if is_focused { KITE_BLUE } else { KITE_BORDER };
 
-    let mut symbols: Vec<&String> = strat_engine.trackers.keys().collect();
-    symbols.sort();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Tabs: NIFTY | F&O | HOLDINGS
+            Constraint::Length(3), // Search bar (/ to search)
+            Constraint::Min(6),    // Stock table
+            Constraint::Length(2), // Quick action hints
+        ])
+        .split(area);
 
-    let mut rows = vec![];
-    for (i, sym) in symbols.iter().enumerate() {
-        let is_selected = is_focused && i == state.watchlist_selected;
-        let tracker = &strat_engine.trackers[*sym];
-        let ltp = tracker.current_price;
-        let cursor = if is_selected { "❯ " } else { "  " };
-
-        let total_depth = tracker.total_buy_qty + tracker.total_sell_qty;
-        let buy_ratio = if total_depth > 0 {
-            (tracker.total_buy_qty as f64 / total_depth as f64) * 100.0
-        } else {
-            50.0
-        };
-        let depth_color = if buy_ratio > 55.0 { NEO_GREEN } else if buy_ratio < 45.0 { NEO_RED } else { NEO_MUTED };
-
-        let rsi = tracker.rsi.value();
-        let rsi_color = if rsi > 70.0 { NEO_RED } else if rsi < 30.0 { NEO_GREEN } else { Color::Cyan };
-
-        let row_style = if is_selected {
-            Style::default().bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
-        rows.push(
-            Row::new(vec![
-                Cell::from(format!("{}{}", cursor, sym)).style(if is_selected { Style::default().fg(NEO_GREEN) } else { Style::default() }),
-                Cell::from(format!("₹{:.2}", ltp)).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Cell::from(format!("{:.2}/{:.2}", tracker.best_bid, tracker.best_ask)).style(Style::default().fg(Color::Yellow)),
-                Cell::from(format!("{:.0}% B", buy_ratio)).style(Style::default().fg(depth_color)),
-                Cell::from(format!("{:.1}", rsi)).style(Style::default().fg(rsi_color)),
-                Cell::from(format!("{:.2}", tracker.vwap.value())).style(Style::default().fg(NEO_MUTED)),
-            ])
-            .style(row_style),
+    // 1. Watchlist Tabs
+    let tab_titles = vec![
+        Span::raw(" [1: NIFTY] "),
+        Span::raw(" [2: F&O] "),
+        Span::raw(" [3: HOLDINGS] "),
+    ];
+    let tabs = Tabs::new(tab_titles)
+        .select(state.watchlist_tab)
+        .style(Style::default().fg(KITE_MUTED))
+        .highlight_style(Style::default().fg(KITE_BLUE).add_modifier(Modifier::BOLD))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color))
+                .title(" Marketwatch "),
         );
-    }
+    frame.render_widget(tabs, chunks[0]);
 
-    let title = format!(" Watchlist ({}) - [b] Buy [s] Sell [Enter] Chart ", symbols.len());
+    // 2. Search Bar
+    let search_style = if state.is_searching {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let search_content = if state.is_searching {
+        format!(" / {}█", state.search_query)
+    } else if state.search_query.is_empty() {
+        " / Press '/' to search symbols...".to_string()
+    } else {
+        format!(" / Filter: {}", state.search_query)
+    };
+    let search_block = Paragraph::new(search_content)
+        .style(search_style)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(if state.is_searching { Color::Yellow } else { KITE_BORDER })),
+        );
+    frame.render_widget(search_block, chunks[1]);
+
+    // 3. Stock Rows
+    let all_stocks = &engine.watchlist;
+    let filtered_stocks: Vec<&String> = if state.search_query.is_empty() {
+        all_stocks.iter().collect()
+    } else {
+        let q = state.search_query.to_uppercase();
+        all_stocks.iter().filter(|s| s.to_uppercase().contains(&q)).collect()
+    };
+
+    let rows: Vec<Row> = filtered_stocks
+        .iter()
+        .enumerate()
+        .map(|(idx, sym)| {
+            let tracker = strat_engine.trackers.get(*sym);
+            let price = tracker.map(|t| t.current_price).unwrap_or(100.0);
+            let first_p = tracker.and_then(|t| t.bar_aggregator.all_bars().first().map(|b| b.open)).unwrap_or(price);
+            let chg_pct = if first_p > 0.0 { ((price - first_p) / first_p) * 100.0 } else { 0.0 };
+
+            let chg_color = if chg_pct >= 0.0 { KITE_GREEN } else { KITE_RED };
+            let sign = if chg_pct >= 0.0 { "+" } else { "" };
+
+            let is_sel = is_focused && idx == state.watchlist_selected;
+            let row_style = if is_sel {
+                Style::default().fg(Color::White).bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            Row::new(vec![
+                Cell::from(Span::styled(sym.replace("-EQ", ""), row_style)),
+                Cell::from(Span::styled(format!("₹{:.2}", price), row_style)),
+                Cell::from(Span::styled(format!("{}{:.2}%", sign, chg_pct), Style::default().fg(chg_color))),
+            ])
+            .style(row_style)
+        })
+        .collect();
+
     let table = Table::new(
         rows,
-        &[
-            Constraint::Percentage(26),
-            Constraint::Percentage(18),
-            Constraint::Percentage(22),
-            Constraint::Percentage(12),
-            Constraint::Percentage(10),
-            Constraint::Percentage(12),
+        [
+            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(9),
         ],
     )
     .header(
-        Row::new(vec!["Symbol", "LTP", "Bid/Ask", "Depth", "RSI", "VWAP"])
-            .style(Style::default().fg(NEO_MUTED).add_modifier(Modifier::BOLD)),
+        Row::new(vec!["SYMBOL", "LTP", "CHG%"])
+            .style(Style::default().fg(KITE_MUTED).add_modifier(Modifier::BOLD)),
     )
     .block(
         Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color))
-            .title(title),
+            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+            .border_style(Style::default().fg(border_color)),
     );
+    frame.render_widget(table, chunks[2]);
 
-    frame.render_widget(table, area);
+    // 4. Quick Action Hints
+    let hints = Line::from(vec![
+        Span::styled(" [b] BUY ", Style::default().fg(KITE_BLUE).add_modifier(Modifier::BOLD)),
+        Span::styled(" [s] SELL ", Style::default().fg(Color::Rgb(255, 87, 34)).add_modifier(Modifier::BOLD)),
+        Span::styled(" [d] DEPTH ", Style::default().fg(Color::Yellow)),
+    ]);
+    frame.render_widget(Paragraph::new(hints).alignment(Alignment::Center), chunks[3]);
 }
 
-fn render_fullscreen_chart(
-    frame: &mut Frame,
-    strat_engine: &StrategyEngine,
-    state: &UiState,
-    area: Rect,
-) {
-    let chart_symbol = state
-        .selected_symbol
-        .as_deref()
-        .or_else(|| strat_engine.trackers.keys().next().map(|s| s.as_str()));
-
-    let chart_data = chart_symbol.and_then(|sym| strat_engine.get_chart_data(sym));
-    render_stock_chart(frame, chart_data.as_ref(), area);
-}
-
-fn render_holdings_pane(
-    frame: &mut Frame,
-    engine: &PaperSimulationEngine,
-    state: &UiState,
-    area: Rect,
-) {
-    let is_focused = state.active_pane == ActivePane::Holdings;
-    let border_color = if is_focused { NEO_FOCUS_BORDER } else { NEO_BORDER };
-
-    let mut positions: Vec<(&String, &trade_core::position::Position)> = engine.positions.iter().collect();
-    positions.sort_by(|a, b| {
-        b.1.unrealized_pnl()
-            .partial_cmp(&a.1.unrealized_pnl())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut rows = vec![];
-    for (i, (sym, pos)) in positions.iter().enumerate() {
-        let is_selected = is_focused && i == state.holdings_selected;
-        let pnl = pos.unrealized_pnl();
-        let pnl_pct = pos.pnl_percent();
-        let pnl_color = if pnl >= 0.0 { NEO_GREEN } else { NEO_RED };
-        let side_color = if matches!(pos.side, PositionSide::Long) { Color::Cyan } else { Color::Yellow };
-
-        let cursor = if is_selected { "❯ " } else { "  " };
-        let sym_text = format!("{}{}", cursor, sym);
-
-        let row_style = if is_selected {
-            Style::default().bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
-        rows.push(
-            Row::new(vec![
-                Cell::from(sym_text).style(if is_selected { Style::default().fg(NEO_GREEN) } else { Style::default() }),
-                Cell::from(format!("{}", pos.side)).style(Style::default().fg(side_color)),
-                Cell::from(format!("{}", pos.quantity)),
-                Cell::from(format!("{:.2}", pos.entry_price)),
-                Cell::from(format!("{:.2}", pos.current_price)),
-                Cell::from(format!("₹{:.2}", pnl)).style(Style::default().fg(pnl_color)),
-                Cell::from(format!("{:.2}%", pnl_pct)).style(Style::default().fg(pnl_color)),
-                Cell::from(format!("{:.2}", pos.stop_loss)).style(Style::default().fg(NEO_MUTED)),
-            ])
-            .style(row_style),
-        );
-    }
-
-    let title = format!(" Open Positions ({}) - [x] to Exit ", positions.len());
-    let table = Table::new(
-        rows,
-        &[
-            Constraint::Percentage(22),
-            Constraint::Percentage(10),
-            Constraint::Percentage(8),
-            Constraint::Percentage(12),
-            Constraint::Percentage(12),
-            Constraint::Percentage(14),
-            Constraint::Percentage(11),
-            Constraint::Percentage(11),
-        ],
-    )
-    .header(
-        Row::new(vec!["Symbol", "Side", "Qty", "Entry", "LTP", "P&L", "P&L %", "StopLoss"])
-            .style(Style::default().fg(NEO_MUTED).add_modifier(Modifier::BOLD)),
-    )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color))
-            .title(title),
-    );
-
-    frame.render_widget(table, area);
-}
-
-fn render_tradebook_pane(
+fn render_bottom_tabs(
     frame: &mut Frame,
     engine: &PaperSimulationEngine,
     state: &UiState,
     area: Rect,
 ) {
-    let is_focused = state.active_pane == ActivePane::Tradebook;
-    let border_color = if is_focused { NEO_FOCUS_BORDER } else { NEO_BORDER };
+    let is_focused = state.active_pane == ActivePane::BottomTabs;
+    let border_color = if is_focused { KITE_BLUE } else { KITE_BORDER };
 
-    let mut rows = vec![];
-    for (i, trade) in engine.trades.iter().rev().take(30).enumerate() {
-        let is_selected = is_focused && i == state.tradebook_selected;
-        let pnl = trade.net_pnl;
-        let pnl_color = if pnl >= 0.0 { NEO_GREEN } else { NEO_RED };
-        let cursor = if is_selected { "❯ " } else { "  " };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Tab switcher: [1: Positions] [2: Orders] [3: Funds]
+            Constraint::Min(4),    // Active Table Content
+        ])
+        .split(area);
 
-        let row_style = if is_selected {
-            Style::default().bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
+    let titles = vec![
+        Span::raw(format!(" [1: POSITIONS ({})] ", engine.positions.len())),
+        Span::raw(format!(" [2: ORDERS ({})] ", engine.pending_orders.len() + engine.trades.len())),
+        Span::raw(" [3: FUNDS & MARGINS] "),
+    ];
 
-        rows.push(
-            Row::new(vec![
-                Cell::from(format!("{}{}", cursor, trade.exit_time.format("%H:%M:%S"))),
-                Cell::from(trade.symbol.clone()),
-                Cell::from(format!("{}", trade.side)),
-                Cell::from(format!("{:.2}", trade.entry_price)),
-                Cell::from(format!("{:.2}", trade.exit_price)),
-                Cell::from(format!("₹{:.2}", pnl)).style(Style::default().fg(pnl_color)),
-                Cell::from(trade.exit_reason.clone()).style(Style::default().fg(NEO_MUTED)),
-            ])
-            .style(row_style),
+    let tabs = Tabs::new(titles)
+        .select(state.bottom_tab as usize)
+        .style(Style::default().fg(KITE_MUTED))
+        .highlight_style(Style::default().fg(KITE_BLUE).add_modifier(Modifier::BOLD))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color)),
         );
+    frame.render_widget(tabs, chunks[0]);
+
+    match state.bottom_tab {
+        BottomTab::Positions => render_positions_table(frame, engine, state, chunks[1], border_color),
+        BottomTab::Orders => render_orders_table(frame, engine, state, chunks[1], border_color),
+        BottomTab::Funds => render_funds_view(frame, engine, chunks[1], border_color),
     }
-
-    let title = format!(" Executed Fills ({}) ", engine.trades.len());
-    let table = Table::new(
-        rows,
-        &[
-            Constraint::Percentage(16),
-            Constraint::Percentage(22),
-            Constraint::Percentage(10),
-            Constraint::Percentage(13),
-            Constraint::Percentage(13),
-            Constraint::Percentage(13),
-            Constraint::Percentage(13),
-        ],
-    )
-    .header(
-        Row::new(vec!["Time", "Symbol", "Side", "Entry", "Exit", "Net P&L", "Reason"])
-            .style(Style::default().fg(NEO_MUTED).add_modifier(Modifier::BOLD)),
-    )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color))
-            .title(title),
-    );
-
-    frame.render_widget(table, area);
 }
 
-fn render_signals_tab(
+fn render_positions_table(
     frame: &mut Frame,
     engine: &PaperSimulationEngine,
     state: &UiState,
     area: Rect,
+    border_color: Color,
 ) {
-    let mut rows = vec![];
-    for (i, sig) in engine.signal_feed.iter().rev().take(40).enumerate() {
-        let is_selected = i == state.signals_selected;
-        let side_color = if sig.side == PositionSide::Long { NEO_GREEN } else { NEO_RED };
-        let cursor = if is_selected { "❯ " } else { "  " };
-
-        let (status, status_style) = if sig.entered {
-            ("EXECUTED", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD))
-        } else {
-            (
-                sig.block_reason.as_deref().unwrap_or("FILTERED"),
-                Style::default().fg(Color::Yellow),
-            )
-        };
-
-        let row_style = if is_selected {
-            Style::default().bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
-        rows.push(
-            Row::new(vec![
-                Cell::from(format!("{}{}", cursor, sig.time.format("%H:%M:%S"))),
-                Cell::from(sig.symbol.clone()),
-                Cell::from(format!("{}", sig.side)).style(Style::default().fg(side_color)),
-                Cell::from(format!("{}", sig.strategy)).style(Style::default().fg(NEO_ACCENT)),
-                Cell::from(status).style(status_style),
-            ])
-            .style(row_style),
-        );
+    if engine.positions.is_empty() {
+        let p = Paragraph::new("No open positions. Press [b] to Buy or [s] to Sell any stock in the Watchlist.")
+            .style(Style::default().fg(KITE_MUTED))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                    .border_style(Style::default().fg(border_color)),
+            );
+        frame.render_widget(p, area);
+        return;
     }
+
+    let is_focused = state.active_pane == ActivePane::BottomTabs;
+    let mut total_unrealized = 0.0;
+
+    let rows: Vec<Row> = engine
+        .positions
+        .values()
+        .enumerate()
+        .map(|(idx, pos)| {
+            let pnl = pos.unrealized_pnl();
+            total_unrealized += pnl;
+            let pnl_pct = pos.pnl_percent();
+            let pnl_color = if pnl >= 0.0 { KITE_GREEN } else { KITE_RED };
+            let sign = if pnl >= 0.0 { "+₹" } else { "-₹" };
+
+            let is_sel = is_focused && idx == state.positions_selected;
+            let row_style = if is_sel {
+                Style::default().fg(Color::White).bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            Row::new(vec![
+                Cell::from(Span::styled("MIS", Style::default().fg(Color::Cyan))),
+                Cell::from(Span::styled(&pos.symbol, row_style)),
+                Cell::from(Span::styled(format!("{}", pos.quantity), row_style)),
+                Cell::from(Span::styled(format!("₹{:.2}", pos.entry_price), row_style)),
+                Cell::from(Span::styled(format!("₹{:.2}", pos.current_price), row_style)),
+                Cell::from(Span::styled(format!("{}{:.2}", sign, pnl.abs()), Style::default().fg(pnl_color).add_modifier(Modifier::BOLD))),
+                Cell::from(Span::styled(format!("{:.2}%", pnl_pct), Style::default().fg(pnl_color))),
+                Cell::from(Span::styled(" [x] Square-off ", Style::default().fg(KITE_RED))),
+            ])
+            .style(row_style)
+        })
+        .collect();
 
     let table = Table::new(
         rows,
-        &[
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-            Constraint::Percentage(25),
-            Constraint::Percentage(20),
+        [
+            Constraint::Length(6),  // Product
+            Constraint::Length(14), // Symbol
+            Constraint::Length(8),  // Qty
+            Constraint::Length(12), // Avg
+            Constraint::Length(12), // LTP
+            Constraint::Length(14), // P&L
+            Constraint::Length(10), // P&L %
+            Constraint::Length(18), // Action
         ],
     )
     .header(
-        Row::new(vec!["Time", "Symbol", "Signal Side", "Strategy Engine", "Execution Status"])
-            .style(Style::default().fg(NEO_MUTED).add_modifier(Modifier::BOLD)),
+        Row::new(vec!["PRODUCT", "SYMBOL", "QTY", "AVG PRICE", "LTP", "P&L (₹)", "CHG%", "ACTION"])
+            .style(Style::default().fg(KITE_MUTED).add_modifier(Modifier::BOLD)),
     )
     .block(
         Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(NEO_FOCUS_BORDER))
-            .title(format!(" Impulse Screener & Alpha Signals ({} total) ", engine.signal_feed.len())),
+            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+            .border_style(Style::default().fg(border_color)),
     );
-
     frame.render_widget(table, area);
 }
 
-fn render_analytics_tab(
+fn render_orders_table(
     frame: &mut Frame,
     engine: &PaperSimulationEngine,
     _state: &UiState,
     area: Rect,
+    border_color: Color,
 ) {
-    let mut stats: HashMap<String, (u32, u32, f64, f64)> = HashMap::new();
-    for trade in &engine.trades {
-        let key = trade.strategy.to_string();
-        let entry = stats.entry(key).or_insert((0, 0, 0.0, 0.0));
-        entry.0 += 1;
-        if trade.net_pnl > 0.0 {
-            entry.1 += 1;
-        }
-        entry.2 += trade.net_pnl;
-        entry.3 += trade.transaction_costs;
-    }
+    let mut rows = Vec::new();
 
-    let mut rows = vec![];
-    let mut sorted: Vec<_> = stats.iter().collect();
-    sorted.sort_by(|a, b| b.1 .2.partial_cmp(&a.1 .2).unwrap_or(std::cmp::Ordering::Equal));
-
-    for (strat, (total, wins, net_pnl, fees)) in sorted {
-        let wr = if *total > 0 { (*wins as f64 / *total as f64) * 100.0 } else { 0.0 };
-        let pnl_color = if *net_pnl >= 0.0 { NEO_GREEN } else { NEO_RED };
+    // 1. Pending Orders
+    for ord in &engine.pending_orders {
+        let side_color = if ord.side == PositionSide::Long { KITE_BLUE } else { Color::Rgb(255, 87, 34) };
+        let side_str = if ord.side == PositionSide::Long { "BUY" } else { "SELL" };
+        let price_str = ord.limit_price.map(|p| format!("₹{:.2}", p)).unwrap_or_else(|| "MKT".to_string());
 
         rows.push(Row::new(vec![
-            Cell::from(strat.clone()).style(Style::default().fg(NEO_ACCENT).add_modifier(Modifier::BOLD)),
-            Cell::from(format!("{}", total)),
-            Cell::from(format!("{}", wins)),
-            Cell::from(format!("{:.1}%", wr)).style(Style::default().fg(if wr >= 50.0 { NEO_GREEN } else { NEO_RED })),
-            Cell::from(format!("₹{:.2}", net_pnl)).style(Style::default().fg(pnl_color)),
-            Cell::from(format!("₹{:.2}", fees)).style(Style::default().fg(NEO_MUTED)),
+            Cell::from(Span::raw(ord.placed_at.format("%H:%M:%S").to_string())),
+            Cell::from(Span::raw(&ord.id)),
+            Cell::from(Span::styled(side_str, Style::default().fg(side_color).add_modifier(Modifier::BOLD))),
+            Cell::from(Span::raw("MIS")),
+            Cell::from(Span::raw(&ord.order_type)),
+            Cell::from(Span::raw(format!("{}", ord.quantity))),
+            Cell::from(Span::raw(price_str)),
+            Cell::from(Span::styled("OPEN", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         ]));
+    }
+
+    // 2. Executed Trades (Last 10)
+    for trade in engine.trades.iter().rev().take(10) {
+        let side_color = if trade.side == PositionSide::Long { KITE_BLUE } else { Color::Rgb(255, 87, 34) };
+        let side_str = if trade.side == PositionSide::Long { "BUY" } else { "SELL" };
+
+        rows.push(Row::new(vec![
+            Cell::from(Span::raw(trade.exit_time.format("%H:%M:%S").to_string())),
+            Cell::from(Span::raw("EXEC")),
+            Cell::from(Span::styled(side_str, Style::default().fg(side_color))),
+            Cell::from(Span::raw("MIS")),
+            Cell::from(Span::raw("MKT")),
+            Cell::from(Span::raw(format!("{}", trade.quantity))),
+            Cell::from(Span::raw(format!("₹{:.2}", trade.exit_price))),
+            Cell::from(Span::styled("COMPLETE", Style::default().fg(KITE_GREEN))),
+        ]));
+    }
+
+    if rows.is_empty() {
+        let p = Paragraph::new("No orders placed yet. Press [b] to Buy or [s] to Sell.")
+            .style(Style::default().fg(KITE_MUTED))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                    .border_style(Style::default().fg(border_color)),
+            );
+        frame.render_widget(p, area);
+        return;
     }
 
     let table = Table::new(
         rows,
-        &[
-            Constraint::Percentage(25),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
+        [
+            Constraint::Length(10), // Time
+            Constraint::Length(14), // Order ID
+            Constraint::Length(6),  // Side
+            Constraint::Length(6),  // Product
+            Constraint::Length(8),  // Type
+            Constraint::Length(8),  // Qty
+            Constraint::Length(12), // Price
+            Constraint::Length(12), // Status
         ],
     )
     .header(
-        Row::new(vec!["Strategy", "Trades", "Wins", "Win Rate", "Net Returns", "Taxes & Fees"])
-            .style(Style::default().fg(NEO_MUTED).add_modifier(Modifier::BOLD)),
+        Row::new(vec!["TIME", "ORDER ID", "SIDE", "PROD", "TYPE", "QTY", "PRICE", "STATUS"])
+            .style(Style::default().fg(KITE_MUTED).add_modifier(Modifier::BOLD)),
     )
     .block(
         Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(NEO_FOCUS_BORDER))
-            .title(" Strategy Alpha & Execution Performance "),
+            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+            .border_style(Style::default().fg(border_color)),
     );
-
     frame.render_widget(table, area);
 }
 
-fn render_footer(
+fn render_funds_view(
     frame: &mut Frame,
     engine: &PaperSimulationEngine,
-    state: &UiState,
     area: Rect,
+    border_color: Color,
 ) {
-    let ticks_per_sec = {
-        let now_inst = std::time::Instant::now();
-        let window = Duration::from_secs(1);
-        let count = engine
-            .tick_times
-            .iter()
-            .rev()
-            .take_while(|t| now_inst.duration_since(**t) < window)
-            .count();
-        count as f64
-    };
+    let tot_pnl = engine.total_portfolio_pnl();
+    let pnl_color = if tot_pnl >= 0.0 { KITE_GREEN } else { KITE_RED };
 
-    let status_text = if let Some((msg, ts)) = &state.status_message {
-        if ts.elapsed() < Duration::from_secs(5) {
-            Span::styled(format!(" ❯ {} ", msg), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        } else {
-            Span::styled(" [NORMAL] ", Style::default().fg(Color::Black).bg(NEO_GREEN).add_modifier(Modifier::BOLD))
-        }
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" Available Cash:       ", Style::default().fg(KITE_MUTED)),
+            Span::styled(format!("₹{:.2}", engine.free_capital()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("     │  Opening Balance:       ", Style::default().fg(KITE_MUTED)),
+            Span::styled(format!("₹{:.2}", engine.initial_capital), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Margin Used (MIS):    ", Style::default().fg(KITE_MUTED)),
+            Span::styled(format!("₹{:.2}", engine.locked_capital), Style::default().fg(Color::Yellow)),
+            Span::styled("     │  Realized Day P&L:      ", Style::default().fg(KITE_MUTED)),
+            Span::styled(format!("₹{:.2}", engine.stats.realized_pnl), Style::default().fg(pnl_color)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Total Portfolio Value:", Style::default().fg(KITE_MUTED)),
+            Span::styled(format!("₹{:.2}", engine.total_value()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("     │  MIS Intraday Leverage: ", Style::default().fg(KITE_MUTED)),
+            Span::styled("5x (20% Margin)", Style::default().fg(KITE_GREEN)),
+        ]),
+    ];
+
+    let p = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+            .border_style(Style::default().fg(border_color)),
+    );
+    frame.render_widget(p, area);
+}
+
+fn render_bottom_status_bar(frame: &mut Frame, state: &UiState, area: Rect) {
+    let msg_span = if let Some((msg, _)) = &state.status_message {
+        Span::styled(format!(" 🔔 {} ", msg), Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
     } else {
-        Span::styled(" [NORMAL] ", Style::default().fg(Color::Black).bg(NEO_GREEN).add_modifier(Modifier::BOLD))
+        Span::styled(
+            " [j/k] Nav  [/] Search  [b] Buy  [s] Sell  [x] Square-off  [d] Depth  [1-3] Tabs  [Tab] Pane  [?] Help  [q] Quit ",
+            Style::default().fg(KITE_MUTED),
+        )
     };
 
-    let algo_status = if engine.algo_enabled {
-        Span::styled(" [ALGO: ON] ", Style::default().fg(Color::Black).bg(NEO_GREEN).add_modifier(Modifier::BOLD))
-    } else {
-        Span::styled(" [ALGO: OFF] ", Style::default().fg(Color::White).bg(Color::Rgb(150, 40, 40)).add_modifier(Modifier::BOLD))
-    };
-
-    let line = Line::from(vec![
-        status_text,
-        Span::raw(" "),
-        algo_status,
-        Span::raw("  "),
-        Span::styled("b: buy", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD)),
-        Span::raw(" │ "),
-        Span::styled("s: sell", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)),
-        Span::raw(" │ "),
-        Span::styled("A: algo", Style::default().fg(Color::Cyan)),
-        Span::raw(" │ "),
-        Span::styled("Tab: pane", Style::default().fg(Color::Yellow)),
-        Span::raw(" │ "),
-        Span::styled("x: exit", Style::default().fg(NEO_RED)),
-        Span::raw(" │ "),
-        Span::styled("X: panic", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)),
-        Span::raw(" │ "),
-        Span::styled("d: ticks", Style::default().fg(NEO_MUTED)),
-        Span::raw(" │ "),
-        Span::styled("?: help", Style::default().fg(Color::Cyan)),
-        Span::raw(" │ "),
-        Span::styled("q: quit", Style::default().fg(NEO_MUTED)),
-        Span::raw(" │ Ticks: "),
-        Span::styled(format!("{}", engine.tick_count), Style::default().fg(NEO_GREEN)),
-        Span::raw(format!(" ({:.0}/s)", ticks_per_sec)),
-    ]);
-
-    let paragraph = Paragraph::new(line).alignment(Alignment::Left);
-    frame.render_widget(paragraph, area);
+    let p = Paragraph::new(Line::from(vec![msg_span]));
+    frame.render_widget(p, area);
 }
 
 fn render_help_modal(frame: &mut Frame, area: Rect) {
-    let popup_area = centered_rect(65, 65, area);
-    frame.render_widget(Clear, popup_area);
+    let popup = centered_rect(60, 60, area);
+    frame.render_widget(Clear, popup);
 
     let help_text = vec![
-        Line::from(Span::styled("═══ Z-TRADE VIM NAVIGATION & ORDERING CHEAT SHEET ═══", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD))),
-        Line::raw(""),
-        Line::from(vec![Span::styled("  j / Down     ", Style::default().fg(Color::Yellow)), Span::raw("Move selection down in active table")]),
-        Line::from(vec![Span::styled("  k / Up       ", Style::default().fg(Color::Yellow)), Span::raw("Move selection up in active table")]),
-        Line::from(vec![Span::styled("  Enter        ", Style::default().fg(Color::Yellow)), Span::raw("Open live technical chart for selected stock")]),
-        Line::from(vec![Span::styled("  c            ", Style::default().fg(Color::Yellow)), Span::raw("Toggle fullscreen technical chart view")]),
-        Line::from(vec![Span::styled("  Tab          ", Style::default().fg(Color::Yellow)), Span::raw("Cycle focus between Watchlist, Holdings & Tradebook")]),
-        Line::from(vec![Span::styled("  g            ", Style::default().fg(Color::Yellow)), Span::raw("Jump to top of table")]),
-        Line::from(vec![Span::styled("  G            ", Style::default().fg(Color::Yellow)), Span::raw("Jump to bottom of table")]),
-        Line::from(vec![Span::styled("  h / l        ", Style::default().fg(Color::Yellow)), Span::raw("Cycle active tabs (Dashboard / Chart / Signals / Analytics)")]),
-        Line::from(vec![Span::styled("  1, 2, 3, 4   ", Style::default().fg(Color::Yellow)), Span::raw("Direct tab jump")]),
-        Line::raw(""),
-        Line::from(Span::styled("─── TRADING ACTIONS & EXECUTION ───────────", Style::default().fg(NEO_MUTED))),
-        Line::from(vec![Span::styled("  b            ", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD)), Span::raw("Open Manual BUY order modal for selected symbol")]),
-        Line::from(vec![Span::styled("  s            ", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)), Span::raw("Open Manual SELL order modal for selected symbol")]),
-        Line::from(vec![Span::styled("  A            ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw("Toggle Automated Algorithm Execution (ON/OFF)")]),
-        Line::from(vec![Span::styled("  x            ", Style::default().fg(NEO_RED)), Span::raw("Square off selected holding immediately at market")]),
-        Line::from(vec![Span::styled("  X            ", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)), Span::raw("PANIC: Close all open positions immediately")]),
-        Line::from(vec![Span::styled("  d            ", Style::default().fg(Color::Cyan)), Span::raw("Toggle live tick stream drawer")]),
-        Line::from(vec![Span::styled("  ? or /       ", Style::default().fg(Color::Cyan)), Span::raw("Toggle this help modal")]),
-        Line::from(vec![Span::styled("  q / Esc      ", Style::default().fg(NEO_MUTED)), Span::raw("Close popup or quit application")]),
-        Line::raw(""),
-        Line::from(Span::styled("⚡ Strategies & risk hot-reload automatically when editing configs/default.toml", Style::default().fg(NEO_GREEN))),
-        Line::from(Span::styled("💾 All trades, holdings & pending orders auto-saved to data/session_state.toml", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled(" ZERODHA KITE / GROWW STYLE TERMINAL KEYBINDINGS ", Style::default().fg(Color::White).bg(KITE_BLUE).add_modifier(Modifier::BOLD))),
+        Line::from(""),
+        Line::from(vec![Span::styled(" Watchlist Navigation: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))]),
+        Line::from("   j / Down         : Move down watchlist"),
+        Line::from("   k / Up           : Move up watchlist"),
+        Line::from("   /                : Open instant Search (type symbol, Enter to select, Esc to clear)"),
+        Line::from("   Enter            : Focus highlighted stock and update Chart"),
+        Line::from(""),
+        Line::from(vec![Span::styled(" Rapid Order Execution (Paper OMS): ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))]),
+        Line::from("   b                : Open BUY order slip (Blue modal)"),
+        Line::from("   s                : Open SELL order slip (Orange modal)"),
+        Line::from("   m / c (in modal) : Toggle MIS (Intraday) vs CNC (Delivery)"),
+        Line::from("   t (in modal)     : Toggle MARKET vs LIMIT vs SL"),
+        Line::from("   Left/Right       : Adjust quantity"),
+        Line::from("   Enter (in modal) : Submit paper order"),
+        Line::from("   Esc              : Cancel / Close modal"),
+        Line::from(""),
+        Line::from(vec![Span::styled(" Positions & Views: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))]),
+        Line::from("   x                : Square-off highlighted open position at market"),
+        Line::from("   d                : Toggle 5-Depth Market Ladder alongside Chart"),
+        Line::from("   1, 2, 3          : Switch bottom tab (Positions, Orders, Funds)"),
+        Line::from("   Tab / h / l      : Switch active pane (Watchlist <-> Chart <-> Bottom Tabs)"),
+        Line::from("   q                : Clean exit and save session"),
+        Line::from(""),
+        Line::from(Span::styled(" Press [?] or [Esc] to close this help window. ", Style::default().fg(Color::Cyan))),
     ];
 
-    let block = Block::default()
-        .title(" Vim Shortcuts & Commands ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(Style::default().fg(NEO_GREEN));
-
-    let paragraph = Paragraph::new(help_text).block(block);
-    frame.render_widget(paragraph, popup_area);
-}
-
-fn render_debug_drawer(frame: &mut Frame, engine: &PaperSimulationEngine, area: Rect) {
-    let drawer_area = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area)[1];
-
-    frame.render_widget(Clear, drawer_area);
-
-    let visible = drawer_area.height.saturating_sub(2) as usize;
-    let lines: Vec<Line> = engine
-        .debug_ticks
-        .iter()
-        .rev()
-        .take(visible)
-        .rev()
-        .map(|s| Line::from(Span::styled(s.clone(), Style::default().fg(Color::Green))))
-        .collect();
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(format!(" 🔍 LIVE TICK STREAM ([d] to close) - {} ticks buffered ", engine.debug_ticks.len()));
-
-    let p = Paragraph::new(lines).block(block);
-    frame.render_widget(p, drawer_area);
+    let p = Paragraph::new(help_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(KITE_BLUE))
+            .title(" Keyboard Shortcuts (Vim / Kite) "),
+    );
+    frame.render_widget(p, popup);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

@@ -1,54 +1,67 @@
 use std::time::Instant;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActiveTab {
-    Dashboard = 0,
-    Chart = 1,
-    Signals = 2,
-    Analytics = 3,
-}
+use crate::order_modal::OrderModalState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivePane {
-    Holdings,
-    Tradebook,
-    Signals,
     Watchlist,
-    Chart,
+    StockView,
+    BottomTabs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BottomTab {
+    Positions = 0,
+    Orders = 1,
+    Funds = 2,
 }
 
 pub struct UiState {
-    pub active_tab: ActiveTab,
     pub active_pane: ActivePane,
-    pub holdings_selected: usize,
-    pub tradebook_selected: usize,
-    pub signals_selected: usize,
+    pub bottom_tab: BottomTab,
+    
+    // Watchlist
     pub watchlist_selected: usize,
-    pub selected_symbol: Option<String>,
-    pub order_modal: crate::order_modal::OrderModalState,
+    pub watchlist_tab: usize, // 0: NIFTY 50, 1: F&O, 2: HOLDINGS
+    pub search_query: String,
+    pub is_searching: bool,
+    pub selected_symbol: String,
+    
+    // Bottom tables
+    pub positions_selected: usize,
+    pub orders_selected: usize,
+    
+    // View toggles
+    pub show_depth: bool,
+    pub chart_timeframe: i64, // 60, 300, 900
     pub show_help: bool,
     pub show_debug: bool,
+    
+    // Modals & messages
+    pub order_modal: OrderModalState,
     pub status_message: Option<(String, Instant)>,
 }
 
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            active_tab: ActiveTab::Dashboard,
-            active_pane: ActivePane::Holdings,
-            holdings_selected: 0,
-            tradebook_selected: 0,
-            signals_selected: 0,
+            active_pane: ActivePane::Watchlist,
+            bottom_tab: BottomTab::Positions,
             watchlist_selected: 0,
-            selected_symbol: None,
-            order_modal: crate::order_modal::OrderModalState::default(),
+            watchlist_tab: 0,
+            search_query: String::new(),
+            is_searching: false,
+            selected_symbol: "RELIANCE".to_string(),
+            positions_selected: 0,
+            orders_selected: 0,
+            show_depth: true,
+            chart_timeframe: 60,
             show_help: false,
             show_debug: false,
+            order_modal: OrderModalState::default(),
             status_message: None,
         }
     }
 }
-
 
 impl UiState {
     pub fn new() -> Self {
@@ -61,11 +74,9 @@ impl UiState {
 
     pub fn cycle_pane(&mut self) {
         self.active_pane = match self.active_pane {
-            ActivePane::Holdings => ActivePane::Tradebook,
-            ActivePane::Tradebook => ActivePane::Watchlist,
-            ActivePane::Watchlist => ActivePane::Holdings,
-            ActivePane::Signals => ActivePane::Holdings,
-            ActivePane::Chart => ActivePane::Holdings,
+            ActivePane::Watchlist => ActivePane::StockView,
+            ActivePane::StockView => ActivePane::BottomTabs,
+            ActivePane::BottomTabs => ActivePane::Watchlist,
         };
     }
 
@@ -74,76 +85,53 @@ impl UiState {
             return;
         }
         match self.active_pane {
-            ActivePane::Holdings => {
-                if self.holdings_selected + 1 < max_rows {
-                    self.holdings_selected += 1;
-                }
-            }
-            ActivePane::Tradebook => {
-                if self.tradebook_selected + 1 < max_rows {
-                    self.tradebook_selected += 1;
-                }
-            }
-            ActivePane::Signals => {
-                if self.signals_selected + 1 < max_rows {
-                    self.signals_selected += 1;
-                }
-            }
             ActivePane::Watchlist => {
                 if self.watchlist_selected + 1 < max_rows {
                     self.watchlist_selected += 1;
                 }
             }
-            ActivePane::Chart => {}
+            ActivePane::BottomTabs => {
+                match self.bottom_tab {
+                    BottomTab::Positions => {
+                        if self.positions_selected + 1 < max_rows {
+                            self.positions_selected += 1;
+                        }
+                    }
+                    BottomTab::Orders => {
+                        if self.orders_selected + 1 < max_rows {
+                            self.orders_selected += 1;
+                        }
+                    }
+                    BottomTab::Funds => {}
+                }
+            }
+            ActivePane::StockView => {}
         }
     }
 
     pub fn prev_row(&mut self) {
         match self.active_pane {
-            ActivePane::Holdings => {
-                if self.holdings_selected > 0 {
-                    self.holdings_selected -= 1;
-                }
-            }
-            ActivePane::Tradebook => {
-                if self.tradebook_selected > 0 {
-                    self.tradebook_selected -= 1;
-                }
-            }
-            ActivePane::Signals => {
-                if self.signals_selected > 0 {
-                    self.signals_selected -= 1;
-                }
-            }
             ActivePane::Watchlist => {
                 if self.watchlist_selected > 0 {
                     self.watchlist_selected -= 1;
                 }
             }
-            ActivePane::Chart => {}
-        }
-    }
-
-    pub fn jump_to_top(&mut self) {
-        match self.active_pane {
-            ActivePane::Holdings => self.holdings_selected = 0,
-            ActivePane::Tradebook => self.tradebook_selected = 0,
-            ActivePane::Signals => self.signals_selected = 0,
-            ActivePane::Watchlist => self.watchlist_selected = 0,
-            ActivePane::Chart => {}
-        }
-    }
-
-    pub fn jump_to_bottom(&mut self, max_rows: usize) {
-        if max_rows == 0 {
-            return;
-        }
-        match self.active_pane {
-            ActivePane::Holdings => self.holdings_selected = max_rows.saturating_sub(1),
-            ActivePane::Tradebook => self.tradebook_selected = max_rows.saturating_sub(1),
-            ActivePane::Signals => self.signals_selected = max_rows.saturating_sub(1),
-            ActivePane::Watchlist => self.watchlist_selected = max_rows.saturating_sub(1),
-            ActivePane::Chart => {}
+            ActivePane::BottomTabs => {
+                match self.bottom_tab {
+                    BottomTab::Positions => {
+                        if self.positions_selected > 0 {
+                            self.positions_selected -= 1;
+                        }
+                    }
+                    BottomTab::Orders => {
+                        if self.orders_selected > 0 {
+                            self.orders_selected -= 1;
+                        }
+                    }
+                    BottomTab::Funds => {}
+                }
+            }
+            ActivePane::StockView => {}
         }
     }
 }
