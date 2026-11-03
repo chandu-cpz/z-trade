@@ -13,6 +13,7 @@ pub enum ActivePane {
     Holdings,
     Tradebook,
     Signals,
+    Watchlist,
     Chart,
 }
 
@@ -22,7 +23,9 @@ pub struct UiState {
     pub holdings_selected: usize,
     pub tradebook_selected: usize,
     pub signals_selected: usize,
+    pub watchlist_selected: usize,
     pub selected_symbol: Option<String>,
+    pub order_modal: crate::order_modal::OrderModalState,
     pub show_help: bool,
     pub show_debug: bool,
     pub status_message: Option<(String, Instant)>,
@@ -36,13 +39,16 @@ impl Default for UiState {
             holdings_selected: 0,
             tradebook_selected: 0,
             signals_selected: 0,
+            watchlist_selected: 0,
             selected_symbol: None,
+            order_modal: crate::order_modal::OrderModalState::default(),
             show_help: false,
             show_debug: false,
             status_message: None,
         }
     }
 }
+
 
 impl UiState {
     pub fn new() -> Self {
@@ -56,7 +62,8 @@ impl UiState {
     pub fn cycle_pane(&mut self) {
         self.active_pane = match self.active_pane {
             ActivePane::Holdings => ActivePane::Tradebook,
-            ActivePane::Tradebook => ActivePane::Holdings,
+            ActivePane::Tradebook => ActivePane::Watchlist,
+            ActivePane::Watchlist => ActivePane::Holdings,
             ActivePane::Signals => ActivePane::Holdings,
             ActivePane::Chart => ActivePane::Holdings,
         };
@@ -82,6 +89,11 @@ impl UiState {
                     self.signals_selected += 1;
                 }
             }
+            ActivePane::Watchlist => {
+                if self.watchlist_selected + 1 < max_rows {
+                    self.watchlist_selected += 1;
+                }
+            }
             ActivePane::Chart => {}
         }
     }
@@ -103,6 +115,11 @@ impl UiState {
                     self.signals_selected -= 1;
                 }
             }
+            ActivePane::Watchlist => {
+                if self.watchlist_selected > 0 {
+                    self.watchlist_selected -= 1;
+                }
+            }
             ActivePane::Chart => {}
         }
     }
@@ -112,6 +129,7 @@ impl UiState {
             ActivePane::Holdings => self.holdings_selected = 0,
             ActivePane::Tradebook => self.tradebook_selected = 0,
             ActivePane::Signals => self.signals_selected = 0,
+            ActivePane::Watchlist => self.watchlist_selected = 0,
             ActivePane::Chart => {}
         }
     }
@@ -124,6 +142,7 @@ impl UiState {
             ActivePane::Holdings => self.holdings_selected = max_rows.saturating_sub(1),
             ActivePane::Tradebook => self.tradebook_selected = max_rows.saturating_sub(1),
             ActivePane::Signals => self.signals_selected = max_rows.saturating_sub(1),
+            ActivePane::Watchlist => self.watchlist_selected = max_rows.saturating_sub(1),
             ActivePane::Chart => {}
         }
     }

@@ -4,12 +4,14 @@ use std::collections::{HashMap, VecDeque};
 use trade_core::config::Config;
 use trade_core::position::Position;
 use trade_core::signal::{DisplaySignal, Signal};
+use trade_core::store::{PendingOrder, SessionState};
 use trade_core::trade::{Trade, TradingStats};
-use trade_core::types::PositionSide;
+use trade_core::types::{PositionSide, StrategyType};
 
 /// High-fidelity paper trading simulation ledger with realistic slippage and fee accounting.
 pub struct PaperSimulationEngine {
     pub positions: HashMap<String, Position>,
+    pub pending_orders: Vec<PendingOrder>,
     pub signal_feed: VecDeque<DisplaySignal>,
     pub trades: Vec<Trade>,
     pub stats: TradingStats,
@@ -17,6 +19,9 @@ pub struct PaperSimulationEngine {
     pub initial_capital: f64,
     pub circuit_breaker_hit: bool,
     pub messages: VecDeque<String>,
+    pub watchlist: Vec<String>,
+    pub algo_enabled: bool,
+    pub session_date: String,
     pub tick_count: u64,
     pub tick_times: VecDeque<std::time::Instant>,
     pub debug_mode: bool,
@@ -27,8 +32,10 @@ pub struct PaperSimulationEngine {
 impl PaperSimulationEngine {
     pub fn new(config: Config) -> Self {
         let initial_capital = config.portfolio.initial_capital;
+        let today = Local::now().format("%Y-%m-%d").to_string();
         Self {
             positions: HashMap::new(),
+            pending_orders: Vec::new(),
             signal_feed: VecDeque::with_capacity(100),
             trades: Vec::new(),
             stats: TradingStats::new(),
@@ -36,11 +43,58 @@ impl PaperSimulationEngine {
             initial_capital,
             circuit_breaker_hit: false,
             messages: VecDeque::with_capacity(50),
+            watchlist: vec![
+                "RELIANCE-EQ".to_string(),
+                "TCS-EQ".to_string(),
+                "HDFCBANK-EQ".to_string(),
+                "INFY-EQ".to_string(),
+                "ICICIBANK-EQ".to_string(),
+                "SBIN-EQ".to_string(),
+            ],
+            algo_enabled: true,
+            session_date: today,
             tick_count: 0,
             tick_times: VecDeque::with_capacity(500),
             debug_mode: false,
             debug_ticks: VecDeque::with_capacity(500),
             config,
+        }
+    }
+
+    /// Rehydrates the engine from persisted session state for across-the-day crash recovery.
+    pub fn from_session(config: Config, session: SessionState) -> Self {
+        let mut engine = Self::new(config);
+        engine.initial_capital = session.initial_capital;
+        engine.locked_capital = session.locked_capital;
+        engine.positions = session.positions;
+        engine.pending_orders = session.pending_orders;
+        engine.trades = session.trades;
+        engine.stats = session.stats;
+        engine.watchlist = session.watchlist;
+        engine.algo_enabled = session.algo_enabled;
+        engine.session_date = session.session_date;
+        engine.log_message(format!(
+            "Restored active session from disk: {} open holdings, {} trades.",
+            engine.positions.len(),
+            engine.trades.len()
+        ));
+        engine
+    }
+
+    /// Exports current memory state into a serializable SessionState.
+    pub fn to_session(&self) -> SessionState {
+        SessionState {
+            session_date: self.session_date.clone(),
+            initial_capital: self.initial_capital,
+            free_capital: self.free_capital(),
+            locked_capital: self.locked_capital,
+            positions: self.positions.clone(),
+            pending_orders: self.pending_orders.clone(),
+            trades: self.trades.clone(),
+            stats: self.stats.clone(),
+            watchlist: self.watchlist.clone(),
+            algo_enabled: self.algo_enabled,
+            last_saved_at: Local::now(),
         }
     }
 
@@ -297,6 +351,60 @@ impl PaperSimulationEngine {
             }
         }
 
+        // Evaluate and fill working pending orders on tick price cross
+        let mut filled_indices = Vec::new();
+        for (i, order) in self.pending_orders.iter().enumerate() {
+            if order.symbol != tick.symbol {
+                continue;
+            }
+            let fill = match (order.side, order.order_type.as_str()) {
+                (PositionSide::Long, "LIMIT") => {
+                    order.limit_price.map(|lp| tick.price <= lp).unwrap_or(false)
+                }
+                (PositionSide::Short, "LIMIT") => {
+                    order.limit_price.map(|lp| tick.price >= lp).unwrap_or(false)
+                }
+                (PositionSide::Long, "STOP_LOSS") => {
+                    order.trigger_price.map(|tp| tick.price >= tp).unwrap_or(false)
+                }
+                (PositionSide::Short, "STOP_LOSS") => {
+                    order.trigger_price.map(|tp| tick.price <= tp).unwrap_or(false)
+                }
+                _ => false,
+            };
+            if fill {
+                filled_indices.push(i);
+            }
+        }
+
+        // Process filled orders in reverse order
+        for idx in filled_indices.into_iter().rev() {
+            let order = self.pending_orders.remove(idx);
+            let entry_price = self.apply_slippage(tick.price, order.side, true);
+            let mut pos = Position::new(
+                order.symbol.clone(),
+                order.token,
+                order.side,
+                StrategyType::Manual,
+                entry_price,
+                order.quantity,
+                &self.config,
+            );
+            if let Some(sl) = order.stop_loss {
+                pos.stop_loss = sl;
+            }
+            if let Some(tgt) = order.target {
+                pos.target = tgt;
+            }
+            let cost = entry_price * (order.quantity as f64);
+            self.locked_capital += cost;
+            self.log_message(format!(
+                "ORDER FILLED: {} {} @{:.2} x{} (ID: {})",
+                order.side, order.symbol, entry_price, order.quantity, order.id
+            ));
+            self.positions.insert(order.symbol, pos);
+        }
+
         let mut exit_reason = None;
         if let Some(pos) = self.positions.get_mut(&tick.symbol) {
             pos.update_price(tick.price);
@@ -311,5 +419,160 @@ impl PaperSimulationEngine {
             }
         }
     }
+
+    /// Submit a new manual or algorithmic order into the OMS
+    pub fn submit_order(&mut self, order: PendingOrder, current_market_price: f64) {
+        if order.order_type == "MARKET" {
+            let ref_price = if current_market_price > 0.0 { current_market_price } else { 100.0 };
+            let entry_price = self.apply_slippage(ref_price, order.side, true);
+            let mut pos = Position::new(
+                order.symbol.clone(),
+                order.token,
+                order.side,
+                StrategyType::Manual,
+                entry_price,
+                order.quantity,
+                &self.config,
+            );
+            if let Some(sl) = order.stop_loss {
+                pos.stop_loss = sl;
+            }
+            if let Some(tgt) = order.target {
+                pos.target = tgt;
+            }
+            let cost = entry_price * (order.quantity as f64);
+            self.locked_capital += cost;
+            self.log_message(format!(
+                "MANUAL MARKET ORDER: {} {} @{:.2} x{}",
+                order.side, order.symbol, entry_price, order.quantity
+            ));
+            self.positions.insert(order.symbol, pos);
+        } else {
+            self.log_message(format!(
+                "PENDING ORDER SUBMITTED: {} {} {} x{} (ID: {})",
+                order.order_type, order.side, order.symbol, order.quantity, order.id
+            ));
+            self.pending_orders.push(order);
+        }
+    }
+
+    /// Cancel a working pending order
+    pub fn cancel_order(&mut self, order_id: &str) -> bool {
+        if let Some(pos) = self.pending_orders.iter().position(|o| o.id == order_id) {
+            let removed = self.pending_orders.remove(pos);
+            self.log_message(format!("ORDER CANCELLED: {} {}", removed.id, removed.symbol));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Cancel all pending orders
+    pub fn cancel_all_pending(&mut self) -> usize {
+        let count = self.pending_orders.len();
+        self.pending_orders.clear();
+        if count > 0 {
+            self.log_message(format!("CANCELLED ALL {} PENDING ORDERS", count));
+        }
+        count
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Local;
+    use trade_core::config::Config;
+    use trade_core::store::PendingOrder;
+    use trade_core::tick::Tick;
+    use trade_core::types::PositionSide;
+
+    #[test]
+    fn test_market_order_submission() {
+        let config = Config::default();
+        let mut sim = PaperSimulationEngine::new(config);
+
+        let order = PendingOrder {
+            id: "MKT-1".to_string(),
+            symbol: "RELIANCE-EQ".to_string(),
+            token: 2885,
+            side: PositionSide::Long,
+            order_type: "MARKET".to_string(),
+            quantity: 10,
+            limit_price: None,
+            trigger_price: None,
+            stop_loss: Some(2400.0),
+            target: Some(2600.0),
+            placed_at: Local::now(),
+            origin: "MANUAL".to_string(),
+        };
+
+        sim.submit_order(order, 2500.0);
+        assert_eq!(sim.positions.len(), 1);
+        assert!(sim.positions.contains_key("RELIANCE-EQ"));
+        assert!(sim.pending_orders.is_empty());
+    }
+
+    #[test]
+    fn test_limit_order_execution_on_tick() {
+        let config = Config::default();
+        let mut sim = PaperSimulationEngine::new(config);
+
+        let order = PendingOrder {
+            id: "LMT-1".to_string(),
+            symbol: "INFY-EQ".to_string(),
+            token: 1594,
+            side: PositionSide::Long,
+            order_type: "LIMIT".to_string(),
+            quantity: 5,
+            limit_price: Some(1500.0),
+            trigger_price: None,
+            stop_loss: Some(1480.0),
+            target: Some(1550.0),
+            placed_at: Local::now(),
+            origin: "MANUAL".to_string(),
+        };
+
+        // Submit limit order @ 1500.0
+        sim.submit_order(order, 1510.0);
+        assert_eq!(sim.pending_orders.len(), 1);
+        assert_eq!(sim.positions.len(), 0);
+
+        // Tick at 1505 (above limit for Long) -> should not fill
+        let tick1 = Tick {
+            symbol: "INFY-EQ".to_string(),
+            token: 1594,
+            price: 1505.0,
+            volume: 100,
+            last_trade_qty: 10,
+            best_bid: 1504.9,
+            best_ask: 1505.0,
+            total_buy_qty: 1000,
+            total_sell_qty: 1000,
+            timestamp: Local::now(),
+        };
+        sim.update_tick(&tick1);
+        assert_eq!(sim.pending_orders.len(), 1);
+        assert_eq!(sim.positions.len(), 0);
+
+        // Tick at 1499.0 (drops below limit) -> should fill!
+        let tick2 = Tick {
+            symbol: "INFY-EQ".to_string(),
+            token: 1594,
+            price: 1499.0,
+            volume: 120,
+            last_trade_qty: 20,
+            best_bid: 1498.9,
+            best_ask: 1499.0,
+            total_buy_qty: 1000,
+            total_sell_qty: 1000,
+            timestamp: Local::now(),
+        };
+        sim.update_tick(&tick2);
+        assert_eq!(sim.pending_orders.len(), 0);
+        assert_eq!(sim.positions.len(), 1);
+        assert!(sim.positions.contains_key("INFY-EQ"));
+    }
+}
+
 

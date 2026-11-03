@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 crossterm = "0.28"
 ratatui = "0.29"
+chrono = { version = "0.4.43", features = ["serde"] }
 trade-core = { path = "../trade-core" }
+trade-indicators = { path = "../trade-indicators" }
 trade-sim = { path = "../trade-sim" }
 trade-strategy = { path = "../trade-strategy" }

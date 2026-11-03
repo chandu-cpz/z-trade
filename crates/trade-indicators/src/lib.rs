@@ -1,3 +1,6 @@
+pub mod candle;
+pub use candle::{BarAggregator, OhlcvBar};
+
 use std::collections::VecDeque;
 
 /// O(1) rolling standard deviation and mean accumulator.
@@ -131,6 +134,10 @@ impl Rsi {
         self.prev_price = Some(price);
         self.rsi
     }
+
+    pub fn value(&self) -> f64 {
+        self.rsi
+    }
 }
 
 /// Exponential Moving Average (EMA).
@@ -176,6 +183,10 @@ pub struct Vwap {
 impl Vwap {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn value(&self) -> f64 {
+        self.vwap
     }
 
     pub fn update(&mut self, price: f64, volume: u64) -> f64 {

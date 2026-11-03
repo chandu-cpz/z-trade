@@ -5,7 +5,7 @@ use trade_core::config::Config;
 use trade_core::signal::Signal;
 use trade_core::tick::Tick;
 use trade_core::types::{PositionSide, StrategyType};
-use trade_indicators::{Ema, RollingStdDev, Rsi, Vwap};
+use trade_indicators::{BarAggregator, Ema, OhlcvBar, RollingStdDev, Rsi, Vwap};
 
 use crate::{
     calculate_ies, DepthPressure, LiquiditySweep, MeanReversion, MomentumScalp, OpeningSniper,
@@ -40,6 +40,7 @@ pub struct StockTracker {
     pub pending_signal: Option<(PositionSide, StrategyType)>,
     pub confirmation_count: usize,
     pub last_alert: Option<DateTime<Local>>,
+    pub bar_aggregator: BarAggregator,
 }
 
 impl StockTracker {
@@ -68,6 +69,7 @@ impl StockTracker {
             pending_signal: None,
             confirmation_count: 0,
             last_alert: None,
+            bar_aggregator: BarAggregator::new(60, 120),
         }
     }
 
@@ -112,6 +114,7 @@ impl StockTracker {
         let price = tick.price;
         self.current_price = price;
         self.vwap.update(price, tick.volume);
+        self.bar_aggregator.update(price, tick.volume, tick.timestamp);
 
         if tick.total_buy_qty > 0 {
             self.total_buy_qty = tick.total_buy_qty;
@@ -270,6 +273,7 @@ impl StockTracker {
 pub struct ChartData {
     pub symbol: String,
     pub price_points: Vec<(f64, f64)>,
+    pub candles: Vec<OhlcvBar>,
     pub vwap_val: f64,
     pub rsi_val: f64,
     pub ema_val: f64,
@@ -297,6 +301,12 @@ impl StockTracker {
             })
             .collect();
 
+        let candles = self.bar_aggregator.all_bars();
+        for c in &candles {
+            if c.low < min_price { min_price = c.low; }
+            if c.high > max_price { max_price = c.high; }
+        }
+
         if min_price > max_price {
             min_price = (self.current_price * 0.995).max(0.0);
             max_price = self.current_price * 1.005;
@@ -308,6 +318,7 @@ impl StockTracker {
         ChartData {
             symbol: self.symbol.clone(),
             price_points,
+            candles,
             vwap_val: self.vwap.vwap,
             rsi_val: self.rsi.rsi,
             ema_val: self.ema_short.value(),

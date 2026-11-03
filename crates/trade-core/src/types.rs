@@ -28,6 +28,7 @@ pub enum StrategyType {
     VolumeProfile,
     GapFade,
     TrendPullback,
+    Manual,
 }
 
 impl std::fmt::Display for StrategyType {
@@ -44,6 +45,7 @@ impl std::fmt::Display for StrategyType {
             StrategyType::VolumeProfile => write!(f, "VolProf"),
             StrategyType::GapFade => write!(f, "GapFade"),
             StrategyType::TrendPullback => write!(f, "Pullbak"),
+            StrategyType::Manual => write!(f, "MANUAL"),
         }
     }
 }

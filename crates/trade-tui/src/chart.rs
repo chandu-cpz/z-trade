@@ -60,18 +60,32 @@ fn guard_render_chart(frame: &mut Frame, data_opt: Option<&ChartData>, chunks: s
         0.0
     };
 
+    let (ohlc_str, ohlc_color) = if let Some(last_c) = data.candles.last() {
+        let col = if last_c.is_bullish() { NEO_GREEN } else { NEO_RED };
+        (
+            format!(
+                "  │  O:{:.2} H:{:.2} L:{:.2} C:{:.2} (Vol: {})",
+                last_c.open, last_c.high, last_c.low, last_c.close, last_c.volume
+            ),
+            col,
+        )
+    } else {
+        ("".to_string(), NEO_MUTED)
+    };
+
     let header_line = Line::from(vec![
         Span::styled(format!(" {} ", data.symbol), Style::default().fg(Color::Black).bg(NEO_GREEN).add_modifier(Modifier::BOLD)),
         Span::raw("  LTP: "),
         Span::styled(format!("₹{:.2}", data.current_price), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(ohlc_str, Style::default().fg(ohlc_color)),
         Span::raw("  │  VWAP: "),
         Span::styled(format!("₹{:.2}", data.vwap_val), Style::default().fg(Color::Yellow)),
         Span::raw("  │  EMA(13): "),
         Span::styled(format!("₹{:.2}", data.ema_val), Style::default().fg(Color::Magenta)),
         Span::raw("  │  RSI(14): "),
         Span::styled(format!("{:.1}", data.rsi_val), Style::default().fg(rsi_color).add_modifier(Modifier::BOLD)),
-        Span::raw("  │  Spread: "),
-        Span::styled(format!("{:.3}% (₹{:.2})", spread_pct, spread), Style::default().fg(NEO_MUTED)),
+        Span::raw("  │  Sprd: "),
+        Span::styled(format!("₹{:.2} ({:.2}%)", spread, spread_pct), Style::default().fg(Color::Cyan)),
     ]);
 
     let header = Paragraph::new(header_line).block(
@@ -81,6 +95,7 @@ fn guard_render_chart(frame: &mut Frame, data_opt: Option<&ChartData>, chunks: s
             .border_style(Style::default().fg(NEO_BORDER)),
     );
     frame.render_widget(header, chunks[0]);
+
 
     // 2. High-Resolution Braille Chart
     let price_pts: &[(f64, f64)] = &data.price_points;

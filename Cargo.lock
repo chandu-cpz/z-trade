@@ -2619,6 +2619,8 @@ dependencies = [
 name = "trade-indicators"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "serde",
  "trade-core",
 ]
 
@@ -2644,9 +2646,11 @@ dependencies = [
 name = "trade-tui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "crossterm",
  "ratatui",
  "trade-core",
+ "trade-indicators",
  "trade-sim",
  "trade-strategy",
 ]
@@ -3298,6 +3302,7 @@ dependencies = [
 name = "z-trade"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "crossterm",
  "dotenvy",
  "env_logger",

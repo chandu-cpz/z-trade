@@ -1,4 +1,5 @@
 pub mod chart;
+pub mod order_modal;
 pub mod state;
 
 use std::collections::HashMap;
@@ -15,7 +16,9 @@ use ratatui::{
 pub use chart::{
     render_stock_chart, NEO_ACCENT, NEO_BORDER, NEO_FOCUS_BORDER, NEO_GREEN, NEO_MUTED, NEO_RED,
 };
+pub use order_modal::{render_order_modal, OrderModalState};
 pub use state::{ActivePane, ActiveTab, UiState};
+pub use trade_core::store::PendingOrder;
 use trade_core::types::PositionSide;
 use trade_sim::PaperSimulationEngine;
 use trade_strategy::StrategyEngine;
@@ -57,6 +60,10 @@ pub fn render_ui(
 
     if state.show_help {
         render_help_modal(frame, size);
+    }
+
+    if state.order_modal.is_open {
+        render_order_modal(frame, &state.order_modal, engine, size);
     }
 }
 
@@ -212,20 +219,102 @@ fn render_dashboard_tab(
 
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .constraints([
+            Constraint::Percentage(33), // Watchlist Pane
+            Constraint::Percentage(37), // Holdings Pane
+            Constraint::Percentage(30), // Tradebook / Fills Pane
+        ])
         .split(chunks[0]);
 
-    render_holdings_pane(frame, engine, state, left_chunks[0]);
-    render_tradebook_pane(frame, engine, state, left_chunks[1]);
+    render_watchlist_pane(frame, strat_engine, state, left_chunks[0]);
+    render_holdings_pane(frame, engine, state, left_chunks[1]);
+    render_tradebook_pane(frame, engine, state, left_chunks[2]);
 
     // Right Split: Live Real-Time Interactive Chart
     let chart_symbol = state
         .selected_symbol
         .as_deref()
-        .or_else(|| engine.positions.keys().next().map(|s| s.as_str()));
+        .or_else(|| engine.positions.keys().next().map(|s| s.as_str()))
+        .or_else(|| strat_engine.trackers.keys().next().map(|s| s.as_str()));
 
     let chart_data = chart_symbol.and_then(|sym| strat_engine.get_chart_data(sym));
     render_stock_chart(frame, chart_data.as_ref(), chunks[1]);
+}
+
+fn render_watchlist_pane(
+    frame: &mut Frame,
+    strat_engine: &StrategyEngine,
+    state: &UiState,
+    area: Rect,
+) {
+    let is_focused = state.active_pane == ActivePane::Watchlist;
+    let border_color = if is_focused { NEO_FOCUS_BORDER } else { NEO_BORDER };
+
+    let mut symbols: Vec<&String> = strat_engine.trackers.keys().collect();
+    symbols.sort();
+
+    let mut rows = vec![];
+    for (i, sym) in symbols.iter().enumerate() {
+        let is_selected = is_focused && i == state.watchlist_selected;
+        let tracker = &strat_engine.trackers[*sym];
+        let ltp = tracker.current_price;
+        let cursor = if is_selected { "❯ " } else { "  " };
+
+        let total_depth = tracker.total_buy_qty + tracker.total_sell_qty;
+        let buy_ratio = if total_depth > 0 {
+            (tracker.total_buy_qty as f64 / total_depth as f64) * 100.0
+        } else {
+            50.0
+        };
+        let depth_color = if buy_ratio > 55.0 { NEO_GREEN } else if buy_ratio < 45.0 { NEO_RED } else { NEO_MUTED };
+
+        let rsi = tracker.rsi.value();
+        let rsi_color = if rsi > 70.0 { NEO_RED } else if rsi < 30.0 { NEO_GREEN } else { Color::Cyan };
+
+        let row_style = if is_selected {
+            Style::default().bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        rows.push(
+            Row::new(vec![
+                Cell::from(format!("{}{}", cursor, sym)).style(if is_selected { Style::default().fg(NEO_GREEN) } else { Style::default() }),
+                Cell::from(format!("₹{:.2}", ltp)).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Cell::from(format!("{:.2}/{:.2}", tracker.best_bid, tracker.best_ask)).style(Style::default().fg(Color::Yellow)),
+                Cell::from(format!("{:.0}% B", buy_ratio)).style(Style::default().fg(depth_color)),
+                Cell::from(format!("{:.1}", rsi)).style(Style::default().fg(rsi_color)),
+                Cell::from(format!("{:.2}", tracker.vwap.value())).style(Style::default().fg(NEO_MUTED)),
+            ])
+            .style(row_style),
+        );
+    }
+
+    let title = format!(" Watchlist ({}) - [b] Buy [s] Sell [Enter] Chart ", symbols.len());
+    let table = Table::new(
+        rows,
+        &[
+            Constraint::Percentage(26),
+            Constraint::Percentage(18),
+            Constraint::Percentage(22),
+            Constraint::Percentage(12),
+            Constraint::Percentage(10),
+            Constraint::Percentage(12),
+        ],
+    )
+    .header(
+        Row::new(vec!["Symbol", "LTP", "Bid/Ask", "Depth", "RSI", "VWAP"])
+            .style(Style::default().fg(NEO_MUTED).add_modifier(Modifier::BOLD)),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color))
+            .title(title),
+    );
+
+    frame.render_widget(table, area);
 }
 
 fn render_fullscreen_chart(
@@ -538,18 +627,28 @@ fn render_footer(
         Span::styled(" [NORMAL] ", Style::default().fg(Color::Black).bg(NEO_GREEN).add_modifier(Modifier::BOLD))
     };
 
+    let algo_status = if engine.algo_enabled {
+        Span::styled(" [ALGO: ON] ", Style::default().fg(Color::Black).bg(NEO_GREEN).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled(" [ALGO: OFF] ", Style::default().fg(Color::White).bg(Color::Rgb(150, 40, 40)).add_modifier(Modifier::BOLD))
+    };
+
     let line = Line::from(vec![
         status_text,
+        Span::raw(" "),
+        algo_status,
         Span::raw("  "),
-        Span::styled("j/k: nav", Style::default().fg(NEO_MUTED)),
+        Span::styled("b: buy", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD)),
         Span::raw(" │ "),
-        Span::styled("Enter: chart", Style::default().fg(Color::Yellow)),
+        Span::styled("s: sell", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)),
         Span::raw(" │ "),
-        Span::styled("1..4: tabs", Style::default().fg(NEO_MUTED)),
+        Span::styled("A: algo", Style::default().fg(Color::Cyan)),
         Span::raw(" │ "),
-        Span::styled("x: exit pos", Style::default().fg(NEO_RED)),
+        Span::styled("Tab: pane", Style::default().fg(Color::Yellow)),
         Span::raw(" │ "),
-        Span::styled("X: panic all", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)),
+        Span::styled("x: exit", Style::default().fg(NEO_RED)),
+        Span::raw(" │ "),
+        Span::styled("X: panic", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)),
         Span::raw(" │ "),
         Span::styled("d: ticks", Style::default().fg(NEO_MUTED)),
         Span::raw(" │ "),
@@ -570,19 +669,22 @@ fn render_help_modal(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, popup_area);
 
     let help_text = vec![
-        Line::from(Span::styled("═══ Z-TRADE VIM NAVIGATION CHEAT SHEET ═══", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("═══ Z-TRADE VIM NAVIGATION & ORDERING CHEAT SHEET ═══", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD))),
         Line::raw(""),
         Line::from(vec![Span::styled("  j / Down     ", Style::default().fg(Color::Yellow)), Span::raw("Move selection down in active table")]),
         Line::from(vec![Span::styled("  k / Up       ", Style::default().fg(Color::Yellow)), Span::raw("Move selection up in active table")]),
         Line::from(vec![Span::styled("  Enter        ", Style::default().fg(Color::Yellow)), Span::raw("Open live technical chart for selected stock")]),
         Line::from(vec![Span::styled("  c            ", Style::default().fg(Color::Yellow)), Span::raw("Toggle fullscreen technical chart view")]),
+        Line::from(vec![Span::styled("  Tab          ", Style::default().fg(Color::Yellow)), Span::raw("Cycle focus between Watchlist, Holdings & Tradebook")]),
         Line::from(vec![Span::styled("  g            ", Style::default().fg(Color::Yellow)), Span::raw("Jump to top of table")]),
         Line::from(vec![Span::styled("  G            ", Style::default().fg(Color::Yellow)), Span::raw("Jump to bottom of table")]),
-        Line::from(vec![Span::styled("  Tab          ", Style::default().fg(Color::Yellow)), Span::raw("Cycle focus between Holdings & Tradebook")]),
         Line::from(vec![Span::styled("  h / l        ", Style::default().fg(Color::Yellow)), Span::raw("Cycle active tabs (Dashboard / Chart / Signals / Analytics)")]),
         Line::from(vec![Span::styled("  1, 2, 3, 4   ", Style::default().fg(Color::Yellow)), Span::raw("Direct tab jump")]),
         Line::raw(""),
-        Line::from(Span::styled("─── TRADING ACTIONS & HOT-RELOAD ──────────", Style::default().fg(NEO_MUTED))),
+        Line::from(Span::styled("─── TRADING ACTIONS & EXECUTION ───────────", Style::default().fg(NEO_MUTED))),
+        Line::from(vec![Span::styled("  b            ", Style::default().fg(NEO_GREEN).add_modifier(Modifier::BOLD)), Span::raw("Open Manual BUY order modal for selected symbol")]),
+        Line::from(vec![Span::styled("  s            ", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)), Span::raw("Open Manual SELL order modal for selected symbol")]),
+        Line::from(vec![Span::styled("  A            ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw("Toggle Automated Algorithm Execution (ON/OFF)")]),
         Line::from(vec![Span::styled("  x            ", Style::default().fg(NEO_RED)), Span::raw("Square off selected holding immediately at market")]),
         Line::from(vec![Span::styled("  X            ", Style::default().fg(NEO_RED).add_modifier(Modifier::BOLD)), Span::raw("PANIC: Close all open positions immediately")]),
         Line::from(vec![Span::styled("  d            ", Style::default().fg(Color::Cyan)), Span::raw("Toggle live tick stream drawer")]),
@@ -590,6 +692,7 @@ fn render_help_modal(frame: &mut Frame, area: Rect) {
         Line::from(vec![Span::styled("  q / Esc      ", Style::default().fg(NEO_MUTED)), Span::raw("Close popup or quit application")]),
         Line::raw(""),
         Line::from(Span::styled("⚡ Strategies & risk hot-reload automatically when editing configs/default.toml", Style::default().fg(NEO_GREEN))),
+        Line::from(Span::styled("💾 All trades, holdings & pending orders auto-saved to data/session_state.json", Style::default().fg(Color::Cyan))),
     ];
 
     let block = Block::default()

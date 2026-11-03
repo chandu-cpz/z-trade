@@ -16,3 +16,4 @@ trade-feed = { path = "../../crates/trade-feed" }
 trade-sim = { path = "../../crates/trade-sim" }
 trade-strategy = { path = "../../crates/trade-strategy" }
 trade-tui = { path = "../../crates/trade-tui" }
+chrono = { version = "0.4.43", features = ["serde"] }
