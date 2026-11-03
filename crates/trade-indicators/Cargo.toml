@@ -1,0 +1,7 @@
+[package]
+name = "trade-indicators"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+trade-core = { path = "../trade-core" }

@@ -1,0 +1,51 @@
+# Default Strategy & Risk Configuration for Z-Trade
+
+[portfolio]
+initial_capital = 20000.0
+max_positions = 25
+max_loss = 3000.0
+max_price = 5000.0
+min_capital_per_trade = 100.0
+
+[execution]
+stop_loss_pct = 0.15
+target_mult = 2.0
+trail_stop_trigger_pct = 0.30
+trail_stop_back_pct = 0.15
+emergency_pct = -1.20
+
+[transaction_costs]
+simulated_slippage_pct = 0.02
+simulated_brokerage_per_order = 20.0
+simulated_stt_pct = 0.025
+simulated_turnover_charges_pct = 0.00345
+
+[filters]
+alert_cooldown_secs = 30
+loss_cooldown_secs = 600
+max_spread_pct = 0.20
+session_start_hour = 9
+session_start_min = 15
+trend_window_secs = 300
+
+[strategy]
+min_ticks = 50
+confirmation_ticks = 1
+consec_ticks = 3
+vol_burst_mult = 5.0
+ltq_burst_mult = 4.0
+accel_thresh = 0.10
+ofi_imbalance_ratio = 3.0
+orb_window_mins = 5
+vwap_stdev_mult = 3.0
+liq_sweep_tick_pierce = 0.05
+invert_strategy = false
+
+[impulse_scoring]
+ies_base_threshold = 60.0
+ies_max_threshold = 85.0
+ies_swap_advantage = 20.0
+ies_window_ticks = 10
+
+[engine]
+num_workers = 8

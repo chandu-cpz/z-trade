@@ -1,6 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["kotak-neo-api", "z-trade"]
+members = [
+    "kotak-neo-api",
+    "crates/trade-core",
+    "crates/trade-indicators",
+    "crates/trade-strategy",
+    "crates/trade-sim",
+    "crates/trade-feed",
+    "crates/trade-tui",
+    "apps/z-trade",
+    "apps/z-backtest",
+]
 
 [profile.release]
 lto = true
