@@ -20,7 +20,7 @@ use trade_core::types::PositionSide;
 use trade_feed::{CsvReplayFeed, KotakFeed, MockFeed};
 use trade_sim::PaperSimulationEngine;
 use trade_strategy::StrategyEngine;
-use trade_tui::{render_ui, ActivePane, BottomTab, ProductType, UiState};
+use trade_tui::{get_watchlist_stocks, render_ui, ActivePane, BottomTab, ProductType, UiState};
 
 const CONFIG_PATH: &str = "configs/default.toml";
 const STATE_DIR: &str = "data";
@@ -191,6 +191,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // 1. Keyboard & Input Handling
         if event::poll(Duration::from_millis(2))? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != crossterm::event::KeyEventKind::Press {
+                    continue;
+                }
+
                 // If in Search Mode
                 if ui_state.is_searching {
                     match key.code {
@@ -201,10 +205,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         }
                         KeyCode::Enter => {
                             ui_state.is_searching = false;
-                            // Select first matching stock
-                            let q = ui_state.search_query.to_uppercase();
-                            if let Some(matched) = sim_engine.watchlist.iter().find(|s| s.to_uppercase().contains(&q)) {
-                                ui_state.selected_symbol = matched.clone();
+                            let stocks = get_watchlist_stocks(&sim_engine, &ui_state);
+                            if !stocks.is_empty() {
+                                ui_state.watchlist_selected = 0;
+                                ui_state.selected_symbol = stocks[0].clone();
                             }
                             continue;
                         }
@@ -288,8 +292,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 }
 
+                let current_watchlist = get_watchlist_stocks(&sim_engine, &ui_state);
                 let max_rows = match ui_state.active_pane {
-                    ActivePane::Watchlist => sim_engine.watchlist.len(),
+                    ActivePane::Watchlist => current_watchlist.len(),
                     ActivePane::BottomTabs => match ui_state.bottom_tab {
                         BottomTab::Positions => sim_engine.positions.len(),
                         BottomTab::Orders => sim_engine.pending_orders.len() + sim_engine.trades.len(),
@@ -328,10 +333,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         ui_state.cycle_pane();
                     }
 
-                    // Bottom Tabs Switcher
-                    KeyCode::Char('1') => ui_state.bottom_tab = BottomTab::Positions,
-                    KeyCode::Char('2') => ui_state.bottom_tab = BottomTab::Orders,
-                    KeyCode::Char('3') => ui_state.bottom_tab = BottomTab::Funds,
+                    // Context-sensitive 1 / 2 / 3 Tab Switchers
+                    KeyCode::Char('1') => match ui_state.active_pane {
+                        ActivePane::Watchlist => {
+                            ui_state.watchlist_tab = 0;
+                            ui_state.watchlist_selected = 0;
+                            sync_selected_stock(&mut ui_state, &sim_engine);
+                        }
+                        ActivePane::StockView => ui_state.chart_timeframe = 60,
+                        ActivePane::BottomTabs => ui_state.bottom_tab = BottomTab::Positions,
+                    },
+                    KeyCode::Char('2') => match ui_state.active_pane {
+                        ActivePane::Watchlist => {
+                            ui_state.watchlist_tab = 1;
+                            ui_state.watchlist_selected = 0;
+                            sync_selected_stock(&mut ui_state, &sim_engine);
+                        }
+                        ActivePane::StockView => ui_state.chart_timeframe = 300,
+                        ActivePane::BottomTabs => ui_state.bottom_tab = BottomTab::Orders,
+                    },
+                    KeyCode::Char('3') => match ui_state.active_pane {
+                        ActivePane::Watchlist => {
+                            ui_state.watchlist_tab = 2;
+                            ui_state.watchlist_selected = 0;
+                            sync_selected_stock(&mut ui_state, &sim_engine);
+                        }
+                        ActivePane::StockView => ui_state.chart_timeframe = 900,
+                        ActivePane::BottomTabs => ui_state.bottom_tab = BottomTab::Funds,
+                    },
+
+                    // Order Cancellation (when on Orders tab)
+                    KeyCode::Char('c') => {
+                        if ui_state.active_pane == ActivePane::BottomTabs && ui_state.bottom_tab == BottomTab::Orders {
+                            if !sim_engine.pending_orders.is_empty() {
+                                let idx = ui_state.orders_selected.min(sim_engine.pending_orders.len().saturating_sub(1));
+                                let id = sim_engine.pending_orders[idx].id.clone();
+                                sim_engine.cancel_order(&id);
+                                ui_state.set_status(format!("Cancelled order {}", id));
+                                let _ = SessionStore::save(STATE_DIR, &sim_engine.to_session());
+                            }
+                        }
+                    }
+                    KeyCode::Char('C') => {
+                        if ui_state.active_pane == ActivePane::BottomTabs && ui_state.bottom_tab == BottomTab::Orders {
+                            let count = sim_engine.cancel_all_pending();
+                            ui_state.set_status(format!("Cancelled all {} pending orders", count));
+                            let _ = SessionStore::save(STATE_DIR, &sim_engine.to_session());
+                        }
+                    }
 
                     // Trading: Order Slip (b for Buy, s for Sell)
                     KeyCode::Char('b') => {
@@ -428,7 +477,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 fn sync_selected_stock(ui_state: &mut UiState, sim_engine: &PaperSimulationEngine) {
-    let stocks = &sim_engine.watchlist;
+    let stocks = get_watchlist_stocks(sim_engine, ui_state);
     if !stocks.is_empty() {
         let idx = ui_state.watchlist_selected.min(stocks.len().saturating_sub(1));
         ui_state.selected_symbol = stocks[idx].clone();

@@ -186,60 +186,70 @@ fn render_watchlist(
     frame.render_widget(search_block, chunks[1]);
 
     // 3. Stock Rows
-    let all_stocks = &engine.watchlist;
-    let filtered_stocks: Vec<&String> = if state.search_query.is_empty() {
-        all_stocks.iter().collect()
+    let filtered_stocks = get_watchlist_stocks(engine, state);
+    if filtered_stocks.is_empty() {
+        let empty_msg = if state.watchlist_tab == 2 {
+            "No active holdings.\nPress [b] to Buy stock."
+        } else {
+            "No matching symbols."
+        };
+        let p = Paragraph::new(empty_msg)
+            .style(Style::default().fg(KITE_MUTED))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                    .border_style(Style::default().fg(border_color)),
+            );
+        frame.render_widget(p, chunks[2]);
     } else {
-        let q = state.search_query.to_uppercase();
-        all_stocks.iter().filter(|s| s.to_uppercase().contains(&q)).collect()
-    };
+        let rows: Vec<Row> = filtered_stocks
+            .iter()
+            .enumerate()
+            .map(|(idx, sym)| {
+                let tracker = strat_engine.trackers.get(sym);
+                let price = tracker.map(|t| t.current_price).unwrap_or(100.0);
+                let first_p = tracker.and_then(|t| t.bar_aggregator.all_bars().first().map(|b| b.open)).unwrap_or(price);
+                let chg_pct = if first_p > 0.0 { ((price - first_p) / first_p) * 100.0 } else { 0.0 };
 
-    let rows: Vec<Row> = filtered_stocks
-        .iter()
-        .enumerate()
-        .map(|(idx, sym)| {
-            let tracker = strat_engine.trackers.get(*sym);
-            let price = tracker.map(|t| t.current_price).unwrap_or(100.0);
-            let first_p = tracker.and_then(|t| t.bar_aggregator.all_bars().first().map(|b| b.open)).unwrap_or(price);
-            let chg_pct = if first_p > 0.0 { ((price - first_p) / first_p) * 100.0 } else { 0.0 };
+                let chg_color = if chg_pct >= 0.0 { KITE_GREEN } else { KITE_RED };
+                let sign = if chg_pct >= 0.0 { "+" } else { "" };
 
-            let chg_color = if chg_pct >= 0.0 { KITE_GREEN } else { KITE_RED };
-            let sign = if chg_pct >= 0.0 { "+" } else { "" };
+                let is_sel = is_focused && idx == state.watchlist_selected;
+                let row_style = if is_sel {
+                    Style::default().fg(Color::White).bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
 
-            let is_sel = is_focused && idx == state.watchlist_selected;
-            let row_style = if is_sel {
-                Style::default().fg(Color::White).bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
+                Row::new(vec![
+                    Cell::from(Span::styled(sym.replace("-EQ", ""), row_style)),
+                    Cell::from(Span::styled(format!("₹{:.2}", price), row_style)),
+                    Cell::from(Span::styled(format!("{}{:.2}%", sign, chg_pct), Style::default().fg(chg_color))),
+                ])
+                .style(row_style)
+            })
+            .collect();
 
-            Row::new(vec![
-                Cell::from(Span::styled(sym.replace("-EQ", ""), row_style)),
-                Cell::from(Span::styled(format!("₹{:.2}", price), row_style)),
-                Cell::from(Span::styled(format!("{}{:.2}%", sign, chg_pct), Style::default().fg(chg_color))),
-            ])
-            .style(row_style)
-        })
-        .collect();
-
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(12),
-            Constraint::Length(10),
-            Constraint::Length(9),
-        ],
-    )
-    .header(
-        Row::new(vec!["SYMBOL", "LTP", "CHG%"])
-            .style(Style::default().fg(KITE_MUTED).add_modifier(Modifier::BOLD)),
-    )
-    .block(
-        Block::default()
-            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-            .border_style(Style::default().fg(border_color)),
-    );
-    frame.render_widget(table, chunks[2]);
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(12),
+                Constraint::Length(10),
+                Constraint::Length(9),
+            ],
+        )
+        .header(
+            Row::new(vec!["SYMBOL", "LTP", "CHG%"])
+                .style(Style::default().fg(KITE_MUTED).add_modifier(Modifier::BOLD)),
+        )
+        .block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                .border_style(Style::default().fg(border_color)),
+        );
+        frame.render_widget(table, chunks[2]);
+    }
 
     // 4. Quick Action Hints
     let hints = Line::from(vec![
@@ -566,4 +576,34 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+pub fn get_watchlist_stocks(engine: &PaperSimulationEngine, state: &UiState) -> Vec<String> {
+    let base_stocks: Vec<String> = match state.watchlist_tab {
+        2 => {
+            let mut pos_syms: Vec<String> = engine.positions.keys().cloned().collect();
+            pos_syms.sort();
+            pos_syms
+        }
+        1 => {
+            vec![
+                "RELIANCE".to_string(),
+                "HDFCBANK".to_string(),
+                "TATAMOTORS".to_string(),
+                "ICICIBANK".to_string(),
+                "INFY".to_string(),
+                "SBIN".to_string(),
+                "KOTAKBANK".to_string(),
+                "BHARTIARTL".to_string(),
+            ]
+        }
+        _ => engine.watchlist.clone(),
+    };
+
+    if state.search_query.is_empty() {
+        base_stocks
+    } else {
+        let q = state.search_query.to_uppercase();
+        base_stocks.into_iter().filter(|s| s.to_uppercase().contains(&q)).collect()
+    }
 }
